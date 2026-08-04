@@ -593,7 +593,8 @@ public class BmdRenderer extends GLRenderer {
             "", "", "k0.rgb", "k1.rgb", "k2.rgb", "k3.rgb", "k0.rrr", "k1.rrr", "k2.rrr", "k3.rrr", 
             "k0.ggg", "k1.ggg", "k2.ggg", "k3.ggg", "k0.bbb", "k1.bbb", "k2.bbb", "k3.bbb", "k0.aaa", "k1.aaa", 
             "k2.aaa", "k3.aaa" };
-        String[] a_inputregs =  { "rprev", "r0", "r1", "r2", "texcolor", "rascolor", "konst", "vec4(0.0, 0.0, 0.0, 0.0)" };
+        String[] a_inputregs = { "truncc4(rprev)", "truncc4(r0)", "truncc4(r1)", "truncc4(r2)", "texcolor", "rascolor", "konst", "vec4(0.0, 0.0, 0.0, 0.0)" };
+        String[] a_inputregsD = { "rprev", "r0", "r1", "r2", "texcolor", "rascolor", "konst", "vec4(0.0, 0.0, 0.0, 0.0)" };
         String[] a_konstsel = { 
             "1.0", "0.875", "0.75", "0.625", "0.5", "0.375", "0.25", "0.125", "", "", 
             "", "", "", "", "", "", "k0.r", "k1.r", "k2.r", "k3.r", 
@@ -750,6 +751,11 @@ public class BmdRenderer extends GLRenderer {
         frag.append("vec3 truncc3(vec3 c)\n");
         frag.append("{\n");
         frag.append("    return vec3(truncc1(c.r), truncc1(c.g), truncc1(c.b));\n");
+        frag.append("}\n");
+        frag.append("\n");
+        frag.append("vec4 truncc4(vec4 c)\n");
+        frag.append("{\n");
+        frag.append("    return vec4(truncc1(c.r), truncc1(c.g), truncc1(c.b), truncc1(c.a));\n");
         frag.append("}\n");
         frag.append("\n");
         frag.append("void main()\n");
@@ -933,7 +939,7 @@ public class BmdRenderer extends GLRenderer {
             a = a_inputregs[tv.combineAlphaA];
             b = a_inputregs[tv.combineAlphaB];
             c = a_inputregs[tv.combineAlphaC];
-            d = a_inputregs[tv.combineAlphaD];
+            d = a_inputregsD[tv.combineAlphaD];
 
             switch(tv.operationAlpha)
             {
