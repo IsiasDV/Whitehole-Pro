@@ -1,5 +1,8 @@
 # Whitehole Neo
 ![Editing Flipswitch and Flip-Swap Galaxy](https://github.com/SMGCommunity/Whitehole-Neo/blob/master/ExampleImage.png)
+
+> **Native rewrite underway:** Whitehole Neo is being rebuilt in C++20. The new native core already supports project filesystems, editable Yaz0/RARC archives, editable BCSV/JMap tables, SMG hashes, and renderer math. See [the C++ rewrite guide](docs/CPP_REWRITE.md) for build instructions, current scope, and the migration sequence. The Java editor remains available as a behavioral reference while its UI and remaining game formats are migrated.
+
 **Whitehole Neo** is a rewrite of *Whitehole*, which was a level editor for *Super Mario Galaxy* and *Super Mario Galaxy 2* that is over 10 years old.
 This goal with this version is to make the program more stable and to be properly maintained.
 It removes a lot of unused code and broken features that were introduced between versions 1.4 through 1.7, and improves on Despaghettification.
