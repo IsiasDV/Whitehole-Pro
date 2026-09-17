@@ -84,6 +84,14 @@ BcsvTable BcsvTable::open(const std::filesystem::path& path, io::Endian endian) 
 }
 
 std::optional<std::size_t> BcsvTable::fieldIndex(std::uint32_t hash) const {
+    if (fieldLookup_.size() == fields_.size()) {
+        const auto found = fieldLookup_.find(hash);
+        if (found == fieldLookup_.end()) {
+            return std::nullopt;
+        }
+        return found->second;
+    }
+    // The non-const fields() accessor drops the cache, so fall back to a scan.
     for (std::size_t index = 0; index < fields_.size(); ++index) {
         if (fields_[index].hash == hash) {
             return index;
@@ -282,6 +290,7 @@ void BcsvTable::parse(const std::vector<std::uint8_t>& data) {
     }
 
     fieldLookup_.clear();
+    fieldLookup_.reserve(fields_.size());
     for (std::size_t i = 0; i < fields_.size(); ++i) {
         fieldLookup_[fields_[i].hash] = i;
     }

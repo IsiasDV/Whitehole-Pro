@@ -1,9 +1,11 @@
 #pragma once
-
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <span>
@@ -11,11 +13,13 @@
 
 namespace whitehole::io {
 
-enum class Endian { little, big };
+enum class Endian : std::uint8_t { little, big };
 
 std::vector<std::uint8_t> readFile(const std::filesystem::path& path);
 void writeFile(const std::filesystem::path& path, std::span<const std::uint8_t> data);
 void writeFile(const std::filesystem::path& path, const std::vector<std::uint8_t>& data);
+
+// ----------------------------------------------------------------------------
 
 class BinaryReader {
 public:
@@ -36,36 +40,21 @@ public:
     [[nodiscard]] float readF32();
 
     [[nodiscard]] std::vector<std::uint8_t> readBytes(std::size_t count);
-    [[nodiscard]] std::span<const std::uint8_t> peekBytes(std::size_t count);
+    [[nodiscard]] std::span<const std::uint8_t> peekBytes(std::size_t count) const;
 
     [[nodiscard]] std::string readString(std::size_t maxLength = 0);
 
-    template<std::size_t N>
-    [[nodiscard]] std::array<std::uint8_t, N> readLittleBytes() {
-        ensure(N);
-        std::array<std::uint8_t, N> out{};
-        std::memcpy(out.data(), data_.data() + position_, N);
-        position_ += N;
-        return out;
-    }
-
-    [[nodiscard]] bool trySkip(std::size_t amount) noexcept {
-        if (amount > remaining()) {
-            return false;
-        }
-        position_ += amount;
-        return true;
-    }
+    [[nodiscard]] bool trySkip(std::size_t amount) noexcept;
 
 private:
-    void ensure(std::size_t count) const;
-    [[nodiscard]] std::uint16_t read16Raw(std::size_t base) const noexcept;
-    [[nodiscard]] std::uint32_t read32Raw(std::size_t base) const noexcept;
+    void require(std::size_t count) const;
 
+    Endian endian_ = Endian::little;
+    std::size_t position_ = 0;
     const std::vector<std::uint8_t>& data_;
-    Endian endian_{Endian::little};
-    std::size_t position_{0};
 };
+
+// ----------------------------------------------------------------------------
 
 class BinaryWriter {
 public:
@@ -83,26 +72,36 @@ public:
     void writeU32(std::uint32_t value);
     void writeF32(float value);
 
-    void writeBytes(std::span<const std::uint8_t> value) noexcept;
-    void writeBytes(const std::vector<std::uint8_t>& value) noexcept;
+    void writeBytes(std::span<const std::uint8_t> value);
+    void writeBytes(const std::vector<std::uint8_t>& value);
 
     void writeString(std::string_view value, bool nullTerminate = true);
 
     void writeSpanRepeated(std::size_t count, std::uint8_t value) noexcept;
-    void ensure(std::size_t count);
-    void patchU16(std::size_t offset, std::uint16_t value) const;
-    void patchU32(std::size_t offset, std::uint32_t value) const;
+    void reserve(std::size_t count);
+    void patchU16(std::size_t offset, std::uint16_t value);
+    void patchU32(std::size_t offset, std::uint32_t value);
     void align32();
 
     std::vector<std::uint8_t>&& finalize() && { return std::move(data_); }
 
 private:
-    void reserveExact();
-    void growTo(std::size_t required);
-
     std::vector<std::uint8_t> data_;
-    Endian endian_{Endian::little};
-    std::size_t position_{0};
+    Endian endian_ = Endian::little;
+    std::size_t position_ = 0;
 };
+
+// ----------------------------------------------------------------------------
+
+template<std::size_t N>
+[[nodiscard]] std::array<std::uint8_t, N> readLittleBytes(const std::vector<std::uint8_t>& data,
+                                                          std::size_t position) {
+    if (position > data.size() || N > data.size() - position) {
+        throw std::runtime_error("binary view overread at offset " + std::to_string(position));
+    }
+    std::array<std::uint8_t, N> out{};
+    std::memcpy(out.data(), data.data() + position, N);
+    return out;
+}
 
 } // namespace whitehole::io

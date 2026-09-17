@@ -46,6 +46,14 @@ private:
                    std::size_t dataOffset, std::uint32_t nodeCount, std::uint32_t entryCount,
                    std::size_t depth = 0);
     [[nodiscard]] std::string readName(std::size_t stringOffset, std::uint32_t relativeOffset) const;
+    [[nodiscard]] std::string normalizePath(std::string_view path) const;
+    void buildLookup();
+
+    struct FileLookup {
+        std::uint32_t hash{0};
+        std::uint32_t pathLen{0};
+        std::uint32_t index{0};
+    };
 
     std::vector<std::uint8_t> bytes_;
     std::vector<RarcEntry> entries_;
@@ -55,6 +63,7 @@ private:
     std::size_t stringTableEnd_{0};
     std::uint32_t metadata_{0};
     std::vector<std::optional<std::vector<std::uint8_t>>> replacements_;
+    std::vector<FileLookup> fileLookup_;
 };
 
 } // namespace whitehole::io

@@ -1,0 +1,47 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    name: Windows (MSYS2 UCRT64, GCC)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            make
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+
+      - name: Configure
+        run: cmake -S . -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DWHITEHOLE_STATIC_RUNTIME=ON
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Smoke test the CLI
+        run: build/whitehole-neo.exe map objects data/templates/SMG2BigGalaxyMap.arc
+
+      - name: Upload executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: WhiteholePro-win64
+          if-no-files-found: error
+          path: |
+            build/whitehole-pro.exe
+            build/whitehole-neo.exe

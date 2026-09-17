@@ -1,0 +1,95 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 16,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-release",
+      "displayName": "Windows Release (portable single-file exe)",
+      "description": "Static runtime, -O3, tests and both executables.",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "WHITEHOLE_STATIC_RUNTIME": "ON",
+        "WHITEHOLE_BUILD_TESTS": "ON",
+        "WHITEHOLE_BUILD_GUI": "ON",
+        "WHITEHOLE_ENABLE_LTO": "OFF"
+      }
+    },
+    {
+      "name": "windows-release-lto",
+      "displayName": "Windows Release with LTO",
+      "description": "Same as windows-release plus -flto=auto. Slower to build, smallest and fastest output.",
+      "inherits": "windows-release",
+      "binaryDir": "${sourceDir}/build-lto",
+      "cacheVariables": {
+        "WHITEHOLE_ENABLE_LTO": "ON"
+      }
+    },
+    {
+      "name": "windows-debug",
+      "displayName": "Windows Debug",
+      "description": "Assertions and symbols for debugging the editor.",
+      "inherits": "windows-release",
+      "binaryDir": "${sourceDir}/build-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "msvc-release",
+      "displayName": "MSVC Release (Visual Studio 2022)",
+      "description": "Builds with the Microsoft toolchain and the static MSVC runtime.",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build-msvc",
+      "cacheVariables": {
+        "WHITEHOLE_BUILD_TESTS": "ON",
+        "WHITEHOLE_BUILD_GUI": "ON",
+        "WHITEHOLE_STATIC_RUNTIME": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release",
+      "jobs": 8
+    },
+    {
+      "name": "windows-release-lto",
+      "configurePreset": "windows-release-lto",
+      "jobs": 8
+    },
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-debug",
+      "jobs": 8
+    },
+    {
+      "name": "msvc-release",
+      "configurePreset": "msvc-release",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

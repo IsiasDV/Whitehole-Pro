@@ -2,9 +2,11 @@
 
 #include "whitehole/smg/hash.hpp"
 
+#include <array>
+#include <cctype>
+#include <charconv>
 #include <fstream>
-#include <iomanip>
-#include <sstream>
+#include <string_view>
 
 namespace whitehole::smg {
 
@@ -36,9 +38,16 @@ std::string FieldHashes::nameOf(std::uint32_t hash) const {
     if (found != names_.end()) {
         return found->second;
     }
-    std::ostringstream stream;
-    stream << '[' << std::hex << std::uppercase << std::setw(8) << std::setfill('0') << hash << ']';
-    return stream.str();
+    std::array<char, 8> digits{};
+    const auto converted = std::to_chars(digits.data(), digits.data() + digits.size(), hash, 16);
+    const auto length = static_cast<std::size_t>(converted.ptr - digits.data());
+    std::string result("[");
+    result.append(digits.size() - length, '0');
+    for (std::size_t index = 0; index < length; ++index) {
+        result.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(digits[index]))));
+    }
+    result.push_back(']');
+    return result;
 }
 
 } // namespace whitehole::smg

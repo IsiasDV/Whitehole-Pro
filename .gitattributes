@@ -1,0 +1,20 @@
+# Line endings: keep the tree normalised so rewrites stop producing whole-file diffs.
+* text=auto eol=lf
+
+# Shell scripts and batch files need their platform endings.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets.
+*.png -text
+*.ico -text
+*.arc -text
+*.szs -text
+*.jar -text
+*.exe -text
+*.dll -text
+
+# Generated / vendored trees.
+/build/ -text
+/lib/ -text

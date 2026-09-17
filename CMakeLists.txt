@@ -3,6 +3,49 @@ cmake_minimum_required(VERSION 3.16)
 project(WhiteholeNeo VERSION 0.2.0 LANGUAGES CXX)
 
 option(WHITEHOLE_BUILD_TESTS "Build the native core tests" ON)
+option(WHITEHOLE_BUILD_GUI "Build the windowed whitehole-pro application (Windows)" ON)
+option(WHITEHOLE_STATIC_RUNTIME "Link the C/C++ runtime statically for a portable single-file executable" ON)
+option(WHITEHOLE_ENABLE_LTO "Enable link-time optimisation for Release builds" OFF)
+
+# Single-config generators (Makefiles, Ninja) need an explicit build type.
+# Defaulting to Release means a plain `cmake --build build` already produces an
+# optimised executable instead of an unoptimised one.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+if(WHITEHOLE_STATIC_RUNTIME)
+    if(MSVC)
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    else()
+        add_link_options(-static -static-libgcc -static-libstdc++)
+    endif()
+endif()
+
+# Release profile shared by every target.
+function(whitehole_optimize target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE $<$<CONFIG:Release>:/O2 /Gy>)
+        target_link_options(${target} PRIVATE $<$<CONFIG:Release>:/OPT:REF /OPT:ICF>)
+    else()
+        target_compile_options(${target} PRIVATE
+            $<$<CONFIG:Release>:-O3>
+            $<$<CONFIG:Release>:-ffunction-sections>
+            $<$<CONFIG:Release>:-fdata-sections>)
+        target_link_options(${target} PRIVATE
+            $<$<CONFIG:Release>:-Wl,--gc-sections>
+            $<$<CONFIG:Release>:-s>)
+        if(WHITEHOLE_ENABLE_LTO)
+            target_compile_options(${target} PRIVATE $<$<CONFIG:Release>:-flto=auto>)
+            target_link_options(${target} PRIVATE $<$<CONFIG:Release>:-flto=auto>)
+        endif()
+    endif()
+endfunction()
 
 add_library(whitehole_core
     cpp/src/db/name_table.cpp
@@ -27,12 +70,11 @@ if(MSVC)
 else()
     target_compile_options(whitehole_core PRIVATE -Wall -Wextra -Wpedantic -Wconversion)
 endif()
+whitehole_optimize(whitehole_core)
 
-set(WHITEHOLE_APP_SOURCES
-    cpp/src/app/cli.cpp
-    cpp/src/main.cpp
-)
-
+# ---------------------------------------------------------------------------
+# Windows detection and the shared Win32 import set
+# ---------------------------------------------------------------------------
 set(WHITEHOLE_HAVE_WIN32_GUI OFF)
 if(WIN32 OR MINGW)
     set(WHITEHOLE_HAVE_WIN32_GUI ON)
@@ -42,23 +84,84 @@ elseif(CMAKE_CXX_COMPILER MATCHES "ucrt64|mingw64|mingw32")
     set(WHITEHOLE_HAVE_WIN32_GUI ON)
 endif()
 
+add_library(whitehole_win32 INTERFACE)
 if(WHITEHOLE_HAVE_WIN32_GUI)
-    list(APPEND WHITEHOLE_APP_SOURCES cpp/src/app/gui_win32.cpp)
-else()
-    list(APPEND WHITEHOLE_APP_SOURCES cpp/src/app/gui_stub.cpp)
+    target_compile_definitions(whitehole_win32 INTERFACE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_link_libraries(whitehole_win32 INTERFACE comctl32 ole32 uuid shell32 comdlg32)
 endif()
 
-add_executable(whitehole-neo ${WHITEHOLE_APP_SOURCES})
-target_link_libraries(whitehole-neo PRIVATE whitehole_core)
-target_compile_definitions(whitehole-neo PRIVATE
+# ---------------------------------------------------------------------------
+# Application objects shared by both executables (compiled only once)
+# ---------------------------------------------------------------------------
+set(WHITEHOLE_GUI_SOURCE cpp/src/app/gui_win32.cpp)
+if(NOT WHITEHOLE_HAVE_WIN32_GUI)
+    set(WHITEHOLE_GUI_SOURCE cpp/src/app/gui_stub.cpp)
+endif()
+
+add_library(whitehole_app OBJECT
+    cpp/src/app/cli.cpp
+    ${WHITEHOLE_GUI_SOURCE}
+)
+target_link_libraries(whitehole_app PRIVATE whitehole_core whitehole_win32)
+target_compile_definitions(whitehole_app PRIVATE
     WHITEHOLE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
+whitehole_optimize(whitehole_app)
+
+# Windows resources: icon, version info, Common Controls v6 + DPI manifest.
+set(WHITEHOLE_RES_FILES "")
 if(WHITEHOLE_HAVE_WIN32_GUI)
-    target_compile_definitions(whitehole-neo PRIVATE UNICODE _UNICODE NOMINMAX)
-    target_link_libraries(whitehole-neo PRIVATE comctl32 ole32 uuid shell32 comdlg32)
+    enable_language(RC)
+    set(WHITEHOLE_VERSION_COMMA "${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},0")
+    set(WHITEHOLE_VERSION_DOT "${PROJECT_VERSION}.0")
+    # The resource compiler is a native Windows binary, so keep every path it
+    # sees relative to the build directory.
+    set(WHITEHOLE_RES_DIR "generated")
+    configure_file(cpp/res/whitehole.rc.in "${CMAKE_CURRENT_BINARY_DIR}/generated/whitehole.rc" @ONLY)
+    file(COPY cpp/res/whitehole.ico cpp/res/whitehole.manifest DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    set(WHITEHOLE_RES_FILES "${CMAKE_CURRENT_BINARY_DIR}/generated/whitehole.rc")
 endif()
+
+function(whitehole_copy_data target)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/data")
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_CURRENT_SOURCE_DIR}/data"
+                "$<TARGET_FILE_DIR:${target}>/data"
+            COMMENT "Copying runtime data next to ${target}")
+    endif()
+endfunction()
+
+# ---------------------------------------------------------------------------
+# Console executable: CLI, scripting, CI
+# ---------------------------------------------------------------------------
+add_executable(whitehole-neo cpp/src/main.cpp $<TARGET_OBJECTS:whitehole_app>)
+target_link_libraries(whitehole-neo PRIVATE whitehole_core whitehole_win32)
 if(MSVC)
     target_compile_options(whitehole-neo PRIVATE /utf-8)
+endif()
+whitehole_optimize(whitehole-neo)
+whitehole_copy_data(whitehole-neo)
+if(WHITEHOLE_RES_FILES)
+    target_sources(whitehole-neo PRIVATE ${WHITEHOLE_RES_FILES})
+endif()
+
+# ---------------------------------------------------------------------------
+# Windowed executable: double-click friendly, no console flash
+# ---------------------------------------------------------------------------
+if(WHITEHOLE_HAVE_WIN32_GUI AND WHITEHOLE_BUILD_GUI)
+    add_executable(whitehole-pro WIN32 cpp/src/winmain.cpp $<TARGET_OBJECTS:whitehole_app>)
+    target_link_libraries(whitehole-pro PRIVATE whitehole_core whitehole_win32)
+    if(NOT MSVC)
+        # GNU toolchains need this to accept the wWinMain entry point.
+        target_link_options(whitehole-pro PRIVATE -municode)
+    endif()
+    whitehole_optimize(whitehole-pro)
+    whitehole_copy_data(whitehole-pro)
+    if(WHITEHOLE_RES_FILES)
+        target_sources(whitehole-pro PRIVATE ${WHITEHOLE_RES_FILES})
+    endif()
+    install(TARGETS whitehole-pro RUNTIME DESTINATION bin)
 endif()
 
 install(TARGETS whitehole-neo RUNTIME DESTINATION bin)

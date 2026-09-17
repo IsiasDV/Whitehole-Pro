@@ -7,7 +7,9 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 
 #include "whitehole/app/application.hpp"
 
@@ -18,10 +20,13 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <commdlg.h>
+#include <shellapi.h>
 #include <shobjidl.h>
 
+#include <algorithm>
+#include <array>
+#include <charconv>
 #include <optional>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -94,9 +99,9 @@ float parseFloat(HWND window, float fallback) {
 }
 
 std::string formatFloat(float value) {
-    std::ostringstream stream;
-    stream << value;
-    return stream.str();
+    std::array<char, 32> buffer{};
+    const auto converted = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
+    return std::string(buffer.data(), converted.ptr);
 }
 
 struct EditorState {
@@ -120,8 +125,66 @@ struct EditorState {
     HWND scaleX{nullptr};
     HWND scaleY{nullptr};
     HWND scaleZ{nullptr};
+    HWND applyButton{nullptr};
+    HWND galaxiesLabel{nullptr};
+    HWND zonesLabel{nullptr};
+    HWND objectsLabel{nullptr};
+    HWND nameLabel{nullptr};
+    HWND positionLabel{nullptr};
+    HWND rotationLabel{nullptr};
+    HWND scaleLabel{nullptr};
     HWND status{nullptr};
 };
+
+// Keeps every control anchored while the window is resized: three list columns
+// stretch to fill the workspace above the fixed transform rows.
+void layoutEditor(EditorState& state, HWND window) {
+    RECT client{};
+    GetClientRect(window, &client);
+    const auto width = static_cast<int>(client.right);
+    const auto height = static_cast<int>(client.bottom);
+
+    constexpr int margin = 12;
+    constexpr int rowHeight = 24;
+    constexpr int rowGap = 36;
+    constexpr int statusHeight = 22;
+
+    const auto statusTop = height - margin - statusHeight;
+    const auto editorTop = statusTop - rowGap - rowHeight - (3 * rowGap);
+    const auto columnWidth = std::max(150, (width - margin * 4) / 3);
+    const auto listTop = margin + 20;
+    const auto listHeight = std::max(80, editorTop - margin - 8 - listTop);
+
+    const auto secondX = margin * 2 + columnWidth;
+    const auto thirdX = margin * 3 + columnWidth * 2;
+    const auto thirdWidth = std::max(150, width - thirdX - margin);
+
+    MoveWindow(state.galaxiesLabel, margin, margin, columnWidth, 18, TRUE);
+    MoveWindow(state.galaxiesList, margin, listTop, columnWidth, listHeight, TRUE);
+    MoveWindow(state.zonesLabel, secondX, margin, columnWidth, 18, TRUE);
+    MoveWindow(state.zonesList, secondX, listTop, columnWidth, listHeight, TRUE);
+    MoveWindow(state.objectsLabel, thirdX, margin, thirdWidth, 18, TRUE);
+    MoveWindow(state.objectsList, thirdX, listTop, thirdWidth, listHeight, TRUE);
+
+    const auto nameWidth = std::clamp(secondX - 76, 140, 224);
+    MoveWindow(state.nameLabel, margin, editorTop + 4, 50, 18, TRUE);
+    MoveWindow(state.nameEdit, 64, editorTop, nameWidth, rowHeight, TRUE);
+    MoveWindow(state.positionLabel, 300, editorTop + rowGap + 4, 70, 18, TRUE);
+    MoveWindow(state.rotationLabel, 300, editorTop + (2 * rowGap) + 4, 70, 18, TRUE);
+    MoveWindow(state.scaleLabel, 300, editorTop + (3 * rowGap) + 4, 70, 18, TRUE);
+
+    constexpr int valueColumns[3] = {370, 456, 542};
+    const HWND positionEdits[3] = {state.posX, state.posY, state.posZ};
+    const HWND rotationEdits[3] = {state.rotX, state.rotY, state.rotZ};
+    const HWND scaleEdits[3] = {state.scaleX, state.scaleY, state.scaleZ};
+    for (int column = 0; column < 3; ++column) {
+        MoveWindow(positionEdits[column], valueColumns[column], editorTop + rowGap, 80, rowHeight, TRUE);
+        MoveWindow(rotationEdits[column], valueColumns[column], editorTop + (2 * rowGap), 80, rowHeight, TRUE);
+        MoveWindow(scaleEdits[column], valueColumns[column], editorTop + (3 * rowGap), 80, rowHeight, TRUE);
+    }
+    MoveWindow(state.applyButton, 640, editorTop + rowGap, 90, 28, TRUE);
+    MoveWindow(state.status, margin, statusTop, width - margin * 2, statusHeight, TRUE);
+}
 
 std::optional<std::filesystem::path> pickFolder(HWND owner) {
     IFileDialog* dialog = nullptr;
@@ -293,45 +356,58 @@ LRESULT CALLBACK editorProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         auto* created = new EditorState();
         SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(created));
         state = created;
-        CreateWindowW(L"STATIC", L"Galaxies", WS_CHILD | WS_VISIBLE, 12, 12, 240, 18, window, nullptr, nullptr, nullptr);
+        created->galaxiesLabel = CreateWindowW(L"STATIC", L"Galaxies", WS_CHILD | WS_VISIBLE, 12, 12, 240, 18, window, nullptr, nullptr, nullptr);
         created->galaxiesList = CreateWindowW(L"LISTBOX", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
                                               12, 32, 240, 360, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdGalaxies)), nullptr, nullptr);
-        CreateWindowW(L"STATIC", L"Zones", WS_CHILD | WS_VISIBLE, 264, 12, 240, 18, window, nullptr, nullptr, nullptr);
+        created->zonesLabel = CreateWindowW(L"STATIC", L"Zones", WS_CHILD | WS_VISIBLE, 264, 12, 240, 18, window, nullptr, nullptr, nullptr);
         created->zonesList = CreateWindowW(L"LISTBOX", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
                                            264, 32, 240, 360, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdZones)), nullptr, nullptr);
-        CreateWindowW(L"STATIC", L"Objects", WS_CHILD | WS_VISIBLE, 516, 12, 360, 18, window, nullptr, nullptr, nullptr);
+        created->objectsLabel = CreateWindowW(L"STATIC", L"Objects", WS_CHILD | WS_VISIBLE, 516, 12, 360, 18, window, nullptr, nullptr, nullptr);
         created->objectsList = CreateWindowW(L"LISTBOX", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
                                              516, 32, 360, 360, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdObjects)), nullptr, nullptr);
 
-        CreateWindowW(L"STATIC", L"Name", WS_CHILD | WS_VISIBLE, 12, 404, 50, 18, window, nullptr, nullptr, nullptr);
+        created->nameLabel = CreateWindowW(L"STATIC", L"Name", WS_CHILD | WS_VISIBLE, 12, 404, 50, 18, window, nullptr, nullptr, nullptr);
         created->nameEdit = CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER, 64, 400, 220, 24, window,
                                           reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdName)), nullptr, nullptr);
-        CreateWindowW(L"STATIC", L"Position", WS_CHILD | WS_VISIBLE, 300, 404, 70, 18, window, nullptr, nullptr, nullptr);
+        created->positionLabel = CreateWindowW(L"STATIC", L"Position", WS_CHILD | WS_VISIBLE, 300, 404, 70, 18, window, nullptr, nullptr, nullptr);
         created->posX = CreateWindowW(L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_BORDER, 370, 400, 80, 24, window,
                                       reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdPosX)), nullptr, nullptr);
         created->posY = CreateWindowW(L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_BORDER, 456, 400, 80, 24, window,
                                       reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdPosY)), nullptr, nullptr);
         created->posZ = CreateWindowW(L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_BORDER, 542, 400, 80, 24, window,
                                       reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdPosZ)), nullptr, nullptr);
-        CreateWindowW(L"STATIC", L"Rotation", WS_CHILD | WS_VISIBLE, 300, 436, 70, 18, window, nullptr, nullptr, nullptr);
+        created->rotationLabel = CreateWindowW(L"STATIC", L"Rotation", WS_CHILD | WS_VISIBLE, 300, 436, 70, 18, window, nullptr, nullptr, nullptr);
         created->rotX = CreateWindowW(L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_BORDER, 370, 432, 80, 24, window,
                                       reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdRotX)), nullptr, nullptr);
         created->rotY = CreateWindowW(L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_BORDER, 456, 432, 80, 24, window,
                                       reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdRotY)), nullptr, nullptr);
         created->rotZ = CreateWindowW(L"EDIT", L"0", WS_CHILD | WS_VISIBLE | WS_BORDER, 542, 432, 80, 24, window,
                                       reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdRotZ)), nullptr, nullptr);
-        CreateWindowW(L"STATIC", L"Scale", WS_CHILD | WS_VISIBLE, 300, 468, 70, 18, window, nullptr, nullptr, nullptr);
+        created->scaleLabel = CreateWindowW(L"STATIC", L"Scale", WS_CHILD | WS_VISIBLE, 300, 468, 70, 18, window, nullptr, nullptr, nullptr);
         created->scaleX = CreateWindowW(L"EDIT", L"1", WS_CHILD | WS_VISIBLE | WS_BORDER, 370, 464, 80, 24, window,
                                         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdScaleX)), nullptr, nullptr);
         created->scaleY = CreateWindowW(L"EDIT", L"1", WS_CHILD | WS_VISIBLE | WS_BORDER, 456, 464, 80, 24, window,
                                         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdScaleY)), nullptr, nullptr);
         created->scaleZ = CreateWindowW(L"EDIT", L"1", WS_CHILD | WS_VISIBLE | WS_BORDER, 542, 464, 80, 24, window,
                                         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdScaleZ)), nullptr, nullptr);
-        CreateWindowW(L"BUTTON", L"Apply", WS_CHILD | WS_VISIBLE, 640, 400, 90, 28, window,
+        created->applyButton = CreateWindowW(L"BUTTON", L"Apply", WS_CHILD | WS_VISIBLE, 640, 400, 90, 28, window,
                       reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdApply)), nullptr, nullptr);
         created->status = CreateWindowW(L"STATIC", L"Open a game folder or a map archive to begin.",
                                         WS_CHILD | WS_VISIBLE, 12, 504, 860, 22, window,
                                         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdStatus)), nullptr, nullptr);
+        DragAcceptFiles(window, TRUE);
+        layoutEditor(*created, window);
+        return 0;
+    }
+    case WM_SIZE:
+        if (state != nullptr && wParam != SIZE_MINIMIZED) {
+            layoutEditor(*state, window);
+        }
+        return 0;
+    case WM_GETMINMAXINFO: {
+        auto* limits = reinterpret_cast<MINMAXINFO*>(lParam);
+        limits->ptMinTrackSize.x = 780;
+        limits->ptMinTrackSize.y = 560;
         return 0;
     }
     case WM_COMMAND:
@@ -386,6 +462,27 @@ LRESULT CALLBACK editorProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
             MessageBoxW(window, utf8ToWide(error.what()).c_str(), L"Whitehole Pro", MB_ICONERROR);
         }
         return 0;
+    case WM_DROPFILES: {
+        const auto drop = reinterpret_cast<HDROP>(wParam);
+        if (state != nullptr && DragQueryFileW(drop, 0xFFFFFFFFU, nullptr, 0) > 0) {
+            wchar_t dropped[MAX_PATH]{};
+            if (DragQueryFileW(drop, 0, dropped, MAX_PATH) > 0) {
+                try {
+                    const std::filesystem::path path(dropped);
+                    if (std::filesystem::is_directory(path)) {
+                        openGame(*state, path);
+                    } else {
+                        openMap(*state, path);
+                    }
+                } catch (const std::exception& error) {
+                    setStatus(*state, error.what());
+                    MessageBoxW(window, utf8ToWide(error.what()).c_str(), L"Whitehole Pro", MB_ICONERROR);
+                }
+            }
+        }
+        DragFinish(drop);
+        return 0;
+    }
     case WM_DESTROY:
         delete state;
         PostQuitMessage(0);
@@ -398,7 +495,7 @@ LRESULT CALLBACK editorProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 
 } // namespace
 
-int runGui(const std::filesystem::path& executable) {
+int runGui(const std::filesystem::path& executable, const std::filesystem::path& initialFile) {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     INITCOMMONCONTROLSEX controls{sizeof(INITCOMMONCONTROLSEX), ICC_STANDARD_CLASSES};
     InitCommonControlsEx(&controls);
@@ -427,7 +524,23 @@ int runGui(const std::filesystem::path& executable) {
         state->dataRoot = dataDirectory(executable);
         state->galaxyNames.loadJson(state->dataRoot / "galaxies.json");
         state->zoneNames.loadJson(state->dataRoot / "zones.json");
-        setStatus(*state, "Open File > Open Map Archive and choose data/templates/SMG2BigGalaxyMap.arc to try the editor.");
+
+        bool opened = false;
+        if (!initialFile.empty() && std::filesystem::exists(initialFile)) {
+            try {
+                if (std::filesystem::is_directory(initialFile)) {
+                    openGame(*state, initialFile);
+                } else {
+                    openMap(*state, initialFile);
+                }
+                opened = true;
+            } catch (const std::exception& error) {
+                setStatus(*state, "Could not open " + initialFile.string() + ": " + error.what());
+            }
+        }
+        if (!opened) {
+            setStatus(*state, "Drag a map archive onto the window, or use File > Open Game Directory.");
+        }
     }
     ShowWindow(window, SW_SHOW);
     UpdateWindow(window);

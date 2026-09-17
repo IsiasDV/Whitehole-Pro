@@ -1,6 +1,7 @@
 #include "whitehole/io/rarc.hpp"
 
 #include "whitehole/io/yaz0.hpp"
+#include "whitehole/smg/hash.hpp"
 #include "whitehole/util/text.hpp"
 
 #include <algorithm>
@@ -73,8 +74,14 @@ std::string lowercase(std::string_view value) {
     return result;
 }
 
-std::string requestedPath(std::string_view path) {
-    return lowercase(whitehole::util::trimSlashes(whitehole::util::replaceSlashes(path)));
+bool matchesSuffix(std::string_view path, std::string_view suffix) {
+    if (suffix.empty() || suffix.size() >= path.size()) {
+        return false;
+    }
+    if (path.compare(path.size() - suffix.size(), suffix.size(), suffix) != 0) {
+        return false;
+    }
+    return path[path.size() - suffix.size() - 1] == '/';
 }
 
 } // namespace
@@ -93,32 +100,24 @@ const RarcEntry* RarcArchive::find(std::string_view path) const {
     if (wanted.empty()) {
         return nullptr;
     }
-    const auto wantedHash = jmapHash(wanted);
-    for (std::size_t i = 0; i < fileLookup_.size(); ++i) {
-        const auto& candidate = fileLookup_[i];
-        if (candidate.hash != wantedHash) {
+    const auto wantedHash = smg::jmapHash(wanted);
+    for (const auto& candidate : fileLookup_) {
+        if (candidate.hash != wantedHash || candidate.pathLen != wanted.size()) {
             continue;
         }
-        if (candidate.pathLen != wanted.size()) {
-            continue;
-        }
-        if (entries_[candidate.index].path == wanted) {
-            return &entries_[candidate.index];
-        }
-        const auto entryName = filename(entries_[candidate.index].path);
-        if (entryName == wanted) {
-            return &entries_[candidate.index];
+        const auto& entry = entries_[candidate.index];
+        if (whitehole::util::equalIgnoreCase(entry.path, wanted)) {
+            return &entry;
         }
     }
+
+    // Fall back to partial paths ("Placement/Common/ObjInfo") and bare file names.
+    const auto wantedName = filename(wanted);
     const RarcEntry* suffixMatch = nullptr;
-    for (std::size_t i = 0; i < fileLookup_.size(); ++i) {
-        const auto& candidate = fileLookup_[i];
-        const auto& entry = entries_[candidate.index];
-        const auto entryPath = lowercase(entry.path);
-        const auto entryName = lowercase(filename(entry.path));
-        if (matchesSuffix(entryPath, wanted)) {
+    for (const auto& entry : entries_) {
+        if (matchesSuffix(lowercase(entry.path), wanted)) {
             suffixMatch = &entry;
-        } else if (matchesSuffix(wanted, entryName)) {
+        } else if (whitehole::util::equalIgnoreCase(filename(entry.path), wantedName)) {
             suffixMatch = &entry;
         }
     }
@@ -126,49 +125,38 @@ const RarcEntry* RarcArchive::find(std::string_view path) const {
 }
 
 bool RarcArchive::fileExists(std::string_view path) const {
-    const auto wanted = normalizePath(path);
-    if (wanted.empty()) {
-        return false;
-    }
-    const auto wantedHash = jmapHash(wanted);
-    for (std::size_t i = 0; i < fileLookup_.size(); ++i) {
-        const auto& candidate = fileLookup_[i];
-        if (candidate.hash != wantedHash) {
-            continue;
-        }
-        if (candidate.pathLen != wanted.size()) {
-            continue;
-        }
-        if (entries_[candidate.index].path == wanted) {
-            return true;
-        }
-        if (filename(entries_[candidate.index].path) == wanted) {
-            return true;
-        }
-    }
-    return false;
+    const auto* entry = find(path);
+    return entry != nullptr && !entry->directory;
 }
 
-std::string RarcArchive::normalizePath(std::string_view path) {
-    std::string out;
-    out.reserve(path.size());
-    for (std::size_t i = 0; i < path.size(); ++i) {
-        const unsigned char c = path[i];
-        if (c == '\\') {
-            out.push_back('/');
-        } else if (c == '/') {
-            if (out.empty() || out.back() == '/') {
-                continue;
-            }
-            out.push_back('/');
-        } else {
-            out.push_back(static_cast<char>(c));
+std::string RarcArchive::normalizePath(std::string_view path) const {
+    std::string collapsed;
+    collapsed.reserve(path.size() + rootName_.size() + 1);
+    for (const auto character : path) {
+        const auto normalized = character == '\\' ? '/' : character;
+        if (normalized == '/' && (collapsed.empty() || collapsed.back() == '/')) {
+            continue;
+        }
+        collapsed.push_back(normalized);
+    }
+    while (!collapsed.empty() && collapsed.back() == '/') {
+        collapsed.pop_back();
+    }
+    if (collapsed.empty()) {
+        return {};
+    }
+
+    // Callers usually address archives relative to their root ("/Stage/jmp/..."),
+    // while entries are stored root-prefixed, so make both sides agree.
+    if (!rootName_.empty()) {
+        const auto root = lowercase(rootName_);
+        const auto candidate = lowercase(collapsed);
+        if (candidate != root && candidate.rfind(root + '/', 0) != 0) {
+            collapsed.insert(0, "/");
+            collapsed.insert(0, rootName_);
         }
     }
-    while (!out.empty() && out.back() == '/') {
-        out.pop_back();
-    }
-    return out;
+    return lowercase(collapsed);
 }
 
 std::vector<std::string> RarcArchive::directories(std::string_view parent) const {
@@ -273,6 +261,20 @@ void RarcArchive::parse() {
     rootName_ = safeComponent(readName(stringOffset, reader.readU32()));
     std::vector<bool> visited(nodeCount, false);
     parseNode(0, rootName_, visited, nodeOffset, entryOffset, stringOffset, dataOffset, nodeCount, entryCount);
+    buildLookup();
+}
+
+void RarcArchive::buildLookup() {
+    fileLookup_.clear();
+    if (entries_.size() > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::runtime_error("RARC contains too many entries for its lookup table");
+    }
+    fileLookup_.reserve(entries_.size());
+    for (std::size_t index = 0; index < entries_.size(); ++index) {
+        const auto key = lowercase(entries_[index].path);
+        fileLookup_.push_back({smg::jmapHash(key), static_cast<std::uint32_t>(key.size()),
+                               static_cast<std::uint32_t>(index)});
+    }
 }
 
 std::string RarcArchive::readName(std::size_t stringOffset, std::uint32_t relativeOffset) const {

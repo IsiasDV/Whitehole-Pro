@@ -111,7 +111,7 @@ void testYaz0() {
     expect(compressed.size() < input.size(), "Yaz0 did not compress repetitive data");
     expect(whitehole::io::yaz0::decompress(compressed) == input, "Yaz0 round trip failed");
     expect(whitehole::io::yaz0::compress(compressed) == compressed, "Yaz0 double compression changed data");
-    expect(whitehole::io::yaz0::decompress(whitehole::io::yaz0::compress({})).empty(),
+    expect(whitehole::io::yaz0::decompress(whitehole::io::yaz0::compress(std::vector<std::uint8_t>{})).empty(),
            "empty Yaz0 round trip failed");
 
     bool rejected = false;

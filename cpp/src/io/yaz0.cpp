@@ -17,7 +17,9 @@ constexpr std::size_t chainSize = 65536;
 constexpr std::size_t hashMask = chainSize - 1;
 constexpr std::size_t minMatch = 3;
 constexpr std::size_t maxWindow = 4096;
+constexpr std::size_t windowMask = maxWindow - 1;
 constexpr std::size_t maxChain = 128;
+constexpr std::uint32_t noMatch = 0xFFFFFFFFU;
 
 [[nodiscard]] std::uint32_t threeByteHash(std::uint8_t a, std::uint8_t b, std::uint8_t c) noexcept {
     std::uint32_t h = static_cast<std::uint32_t>(a) * 31u + static_cast<std::uint32_t>(b);
@@ -31,8 +33,8 @@ struct MatchResult {
 };
 
 [[nodiscard]] MatchResult bestMatchAt(std::span<const std::uint8_t> data, std::size_t position,
-                                      const std::vector<std::uint16_t>& head,
-                                      const std::vector<std::uint16_t>& prev) noexcept {
+                                      const std::vector<std::uint32_t>& head,
+                                      const std::vector<std::uint32_t>& prev) noexcept {
     if (position >= data.size()) {
         return {};
     }
@@ -46,9 +48,17 @@ struct MatchResult {
     std::size_t bestLen = 0;
     std::size_t chain = 0;
 
-    for (std::size_t i = head[h]; i != std::numeric_limits<std::uint16_t>::max(); i = prev[i]) {
-        if (i >= position || i + 2 >= data.size()) {
+    for (std::uint32_t i = head[h]; i != noMatch; i = prev[i & windowMask]) {
+        if (++chain > maxChain) {
+            break;
+        }
+        if (i >= position) {
             continue;
+        }
+        const auto distance = position - static_cast<std::size_t>(i);
+        if (distance > maxWindow) {
+            // The chain is newest-first, so everything older is outside the window.
+            break;
         }
         if (data[i] != data[position] || data[i + 1] != data[position + 1]) {
             continue;
@@ -65,24 +75,18 @@ struct MatchResult {
                 break;
             }
         }
-        if (++chain > maxChain) {
-            break;
-        }
     }
 
     return {bestPos, bestLen};
 }
 
-void buildHashTables(std::span<const std::uint8_t> data,
-                     std::vector<std::uint16_t>& head,
-                     std::vector<std::uint16_t>& prev) {
-    head.assign(data.size() + 1, std::numeric_limits<std::uint16_t>::max());
-    prev.assign(data.size() + 1, std::numeric_limits<std::uint16_t>::max());
-    for (std::size_t i = 0; i + 2 < data.size(); ++i) {
-        const auto h = threeByteHash(data[i], data[i + 1], data[i + 2]);
-        prev[i] = head[h];
-        head[h] = static_cast<std::uint16_t>(i);
-    }
+// The chains are filled as the encoder advances, so every stored position is
+// behind the cursor and the 12-bit window keeps the table tiny.
+void insertPosition(std::span<const std::uint8_t> data, std::size_t position,
+                    std::vector<std::uint32_t>& head, std::vector<std::uint32_t>& prev) noexcept {
+    const auto h = threeByteHash(data[position], data[position + 1], data[position + 2]);
+    prev[position & windowMask] = head[h];
+    head[h] = static_cast<std::uint32_t>(position);
 }
 
 std::vector<std::uint8_t> compressGeneric(std::span<const std::uint8_t> data) {
@@ -97,8 +101,15 @@ std::vector<std::uint8_t> compressGeneric(std::span<const std::uint8_t> data) {
     output[6] = static_cast<std::uint8_t>(size >> 8U);
     output[7] = static_cast<std::uint8_t>(size);
 
-    std::vector<std::uint16_t> head, prev;
-    buildHashTables(data, head, prev);
+    std::vector<std::uint32_t> head(chainSize, noMatch);
+    std::vector<std::uint32_t> prev(maxWindow, noMatch);
+    std::size_t inserted = 0;
+    const auto insertUpTo = [&](std::size_t target) {
+        while (inserted <= target && inserted + 2 < data.size()) {
+            insertPosition(data, inserted, head, prev);
+            ++inserted;
+        }
+    };
 
     std::size_t position = 0;
     while (position < data.size()) {
@@ -107,10 +118,12 @@ std::vector<std::uint8_t> compressGeneric(std::span<const std::uint8_t> data) {
         std::uint8_t flags = 0;
 
         for (unsigned bit = 0; bit < 8 && position < data.size(); ++bit) {
+            insertUpTo(position);
             const auto match = bestMatchAt(data, position, head, prev);
             bool useMatch = false;
 
             if (match.length >= minMatch && position + 1 < data.size()) {
+                insertUpTo(position + 1);
                 const auto next = bestMatchAt(data, position + 1, head, prev);
                 if (next.position != 0 && next.length > match.length + 1) {
                     useMatch = false;
@@ -218,18 +231,18 @@ void decompressTo(const std::vector<std::uint8_t>& data, std::vector<std::uint8_
                 throw binary::Error{"Yaz0 back-reference points before the output buffer", {}, inputPosition};
             }
 
-            auto src = output.data() + outputPosition - distance;
             std::size_t remaining = outputSize - outputPosition;
             std::size_t copyLen = length;
             if (copyLen > remaining) {
                 copyLen = remaining;
             }
-            if (copyLen < 16) {
-                for (std::size_t i = 0; i < copyLen; ++i) {
-                    output[outputPosition + i] = src[i];
-                }
+            if (distance >= copyLen) {
+                std::memcpy(output.data() + outputPosition, output.data() + outputPosition - distance, copyLen);
             } else {
-                std::memcpy(output.data() + outputPosition, src, copyLen);
+                // Overlapping match: the pattern repeats, so copy forward byte by byte.
+                for (std::size_t i = 0; i < copyLen; ++i) {
+                    output[outputPosition + i] = output[outputPosition + i - distance];
+                }
             }
             outputPosition += copyLen;
         }
@@ -241,6 +254,7 @@ std::vector<std::uint8_t> compress(const std::vector<std::uint8_t>& data, unsign
 }
 
 std::vector<std::uint8_t> compress(std::span<const std::uint8_t> data, unsigned level) {
+    (void)level; // All levels share the single greedy matcher until the ring-buffer pass lands.
     if (isCompressed(data)) {
         return std::vector<std::uint8_t>{data.begin(), data.end()};
     }

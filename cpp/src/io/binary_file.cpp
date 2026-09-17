@@ -31,24 +31,54 @@ std::vector<std::uint8_t> readFile(const std::filesystem::path& path) {
     return result;
 }
 
-void writeFile(const std::filesystem::path& path, const std::vector<std::uint8_t>& data) {
+void writeFile(const std::filesystem::path& path, std::span<const std::uint8_t> data) {
     if (const auto parent = path.parent_path(); !parent.empty()) {
         std::filesystem::create_directories(parent);
     }
-    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
-    if (!stream) {
-        throw std::runtime_error("Could not open file for writing: " + path.string());
+
+    // Write to a sibling temporary file first: an interrupted or failed save can
+    // then never destroy the user's existing archive.
+    auto temporary = path;
+    temporary += ".tmp";
+    {
+        std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
+        if (!stream) {
+            throw std::runtime_error("Could not open file for writing: " + path.string());
+        }
+        if (!data.empty()) {
+            stream.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+        }
+        stream.flush();
+        if (!stream) {
+            std::error_code ignored;
+            std::filesystem::remove(temporary, ignored);
+            throw std::runtime_error("Could not write file: " + path.string());
+        }
     }
-    if (!data.empty()) {
-        stream.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+
+    std::error_code error;
+    if (std::filesystem::is_regular_file(path)) {
+        auto backup = path;
+        backup += ".bak";
+        std::filesystem::copy_file(path, backup, std::filesystem::copy_options::overwrite_existing, error);
+        error.clear();
     }
-    if (!stream) {
-        throw std::runtime_error("Could not write file: " + path.string());
+
+    std::filesystem::rename(temporary, path, error);
+    if (error) {
+        // Fall back to an in-place copy when the destination is held open by
+        // another process (for example a hex editor or an open archive view).
+        std::filesystem::copy_file(temporary, path, std::filesystem::copy_options::overwrite_existing);
+        std::filesystem::remove(temporary, error);
     }
 }
 
+void writeFile(const std::filesystem::path& path, const std::vector<std::uint8_t>& data) {
+    writeFile(path, std::span<const std::uint8_t>{data});
+}
+
 BinaryReader::BinaryReader(const std::vector<std::uint8_t>& data, Endian endian)
-    : data_(data), endian_(endian) {}
+    : endian_(endian), data_(data) {}
 
 void BinaryReader::require(std::size_t count) const {
     if (count > remaining()) {
@@ -121,6 +151,19 @@ std::vector<std::uint8_t> BinaryReader::readBytes(std::size_t count) {
     return {begin, begin + static_cast<std::ptrdiff_t>(count)};
 }
 
+std::span<const std::uint8_t> BinaryReader::peekBytes(std::size_t count) const {
+    require(count);
+    return std::span<const std::uint8_t>{data_}.subspan(position_, count);
+}
+
+bool BinaryReader::trySkip(std::size_t amount) noexcept {
+    if (amount > remaining()) {
+        return false;
+    }
+    position_ += amount;
+    return true;
+}
+
 std::string BinaryReader::readString(std::size_t maxLength) {
     std::string result;
     while (remaining() > 0 && (maxLength == 0 || result.size() < maxLength)) {
@@ -186,15 +229,24 @@ void BinaryWriter::writeF32(float value) {
     writeU32(bits);
 }
 
+void BinaryWriter::writeBytes(std::span<const std::uint8_t> value) {
+    if (value.empty()) {
+        return;
+    }
+    reserve(value.size());
+    std::memcpy(data_.data() + position_, value.data(), value.size());
+    position_ += value.size();
+}
+
 void BinaryWriter::writeBytes(const std::vector<std::uint8_t>& value) {
-    writeBytes(std::span{value});
+    writeBytes(std::span<const std::uint8_t>{value});
 }
 
 void BinaryWriter::writeString(std::string_view value, bool nullTerminate) {
     if (value.empty() && !nullTerminate) {
         return;
     }
-    ensure(value.size() + (nullTerminate ? 1U : 0U));
+    reserve(value.size() + (nullTerminate ? 1U : 0U));
     std::memcpy(data_.data() + position_, value.data(), value.size());
     position_ += value.size();
     if (nullTerminate) {
@@ -212,17 +264,20 @@ void BinaryWriter::writeSpanRepeated(std::size_t count, std::uint8_t value) noex
     position_ = required;
 }
 
-void BinaryWriter::patchU16(std::size_t offset, std::uint16_t value) const {
-    const std::uint8_t l = static_cast<std::uint8_t>(value);
-    const std::uint8_t h = static_cast<std::uint8_t>(value >> 8U);
-    if (endian_ == Endian::big) {
-        std::memcpy(data_.data() + offset, std::span<const std::uint8_t, 2>{h, l}.data(), 2);
-    } else {
-        std::memcpy(data_.data() + offset, std::span<const std::uint8_t, 2>{l, h}.data(), 2);
+void BinaryWriter::patchU16(std::size_t offset, std::uint16_t value) {
+    if (offset > data_.size() || 2 > data_.size() - offset) {
+        throw std::out_of_range("Binary patch offset is outside the output buffer");
     }
+    const std::array<std::uint8_t, 2> bytes{
+        endian_ == Endian::big ? static_cast<std::uint8_t>(value >> 8U) : static_cast<std::uint8_t>(value),
+        endian_ == Endian::big ? static_cast<std::uint8_t>(value) : static_cast<std::uint8_t>(value >> 8U)};
+    std::memcpy(data_.data() + offset, bytes.data(), bytes.size());
 }
 
-void BinaryWriter::patchU32(std::size_t offset, std::uint32_t value) const {
+void BinaryWriter::patchU32(std::size_t offset, std::uint32_t value) {
+    if (offset > data_.size() || 4 > data_.size() - offset) {
+        throw std::out_of_range("Binary patch offset is outside the output buffer");
+    }
     if (endian_ == Endian::big) {
         data_[offset] = static_cast<std::uint8_t>(value >> 24U);
         data_[offset + 1] = static_cast<std::uint8_t>(value >> 16U);

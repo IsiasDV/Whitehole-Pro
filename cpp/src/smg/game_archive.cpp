@@ -3,10 +3,27 @@
 #include "whitehole/util/text.hpp"
 
 #include <algorithm>
-#include <regex>
+#include <cctype>
 #include <stdexcept>
 
 namespace whitehole::smg {
+namespace {
+
+// Recognises the "WorldMapNNGalaxy" staging pattern without paying for <regex>.
+[[nodiscard]] bool isWorldMapGalaxy(std::string_view name) noexcept {
+    constexpr std::string_view prefix = "WorldMap";
+    constexpr std::string_view suffix = "Galaxy";
+    if (name.size() != prefix.size() + 2 + suffix.size()) {
+        return false;
+    }
+    if (name.substr(0, prefix.size()) != prefix || name.substr(name.size() - suffix.size()) != suffix) {
+        return false;
+    }
+    return std::isdigit(static_cast<unsigned char>(name[prefix.size()])) != 0
+        && std::isdigit(static_cast<unsigned char>(name[prefix.size() + 1])) != 0;
+}
+
+} // namespace
 
 GameArchive::GameArchive(std::filesystem::path root) : filesystem_(std::move(root)) {
     if (filesystem_.fileExists("/StageData/ObjNameTable.arc")) {
@@ -34,14 +51,13 @@ GameArchive::GameArchive(std::filesystem::path root) : filesystem_(std::move(roo
             }
         }
     } else {
-        const std::regex worldPattern("^WorldMap\\d{2}Galaxy$");
         for (const auto& stage : filesystem_.directories("/StageData")) {
             const auto mapPath = "/StageData/" + stage + "/" + stage + "Map.arc";
             if (!filesystem_.fileExists(mapPath)) {
                 continue;
             }
             zones_.push_back(stage);
-            if (std::regex_match(stage, worldPattern)
+            if (isWorldMapGalaxy(stage)
                 && filesystem_.fileExists("/ObjectData/" + stage.substr(0, stage.size() - 6) + ".arc")) {
                 worlds_.push_back(stage);
             }
