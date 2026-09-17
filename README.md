@@ -19,7 +19,7 @@ Major new additions include:
 - Full compatability with all of SMG1's stages
 - Tons of bugs introduced in older versions of Whitehole have been fixed
 
-This is intended for Java 11, though the program runs fine on newer Java versions as well, but requires the tool to be started using this command: ```java --add-exports=java.desktop/sun.awt=ALL-UNNAMED --add-opens=java.desktop/sun.awt.windows=ALL-UNNAMED -jar Whitehole.jar```.<br/>Alternatively, run the included `.bat` file.
+This is intended for Java 11, though the program runs fine on newer Java versions as well, but requires the tool to be started using this command: ```java --add-exports=java.desktop/sun.awt=ALL-UNNAMED --add-opens=java.desktop/sun.awt.windows=ALL-UNNAMED -jar Whitehole.jar```.<br/>Alternatively, run the included `Whitehole.bat`. The Windows launcher accepts `Whitehole.jar`, `Whitehole-Neo.jar`, or `WhiteholeNeo.jar` beside it; you can also drag a JAR onto the batch file. Keep the release's `data` directory beside the launcher.
 
 ## Controls
 - Left Click: Select/Deselect object (hold <kbd>Shift</kbd> or <kbd>Ctrl</kbd> to select multiple)
