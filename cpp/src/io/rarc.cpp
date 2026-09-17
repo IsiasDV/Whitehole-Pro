@@ -89,25 +89,36 @@ RarcArchive RarcArchive::open(const std::filesystem::path& path) {
 }
 
 const RarcEntry* RarcArchive::find(std::string_view path) const {
-    const auto wanted = requestedPath(path);
+    const auto wanted = normalizePath(path);
     if (wanted.empty()) {
         return nullptr;
     }
-    const RarcEntry* suffixMatch = nullptr;
-    for (const auto& entry : entries_) {
-        if (entry.directory) {
+    const auto wantedHash = jmapHash(wanted);
+    for (std::size_t i = 0; i < fileLookup_.size(); ++i) {
+        const auto& candidate = fileLookup_[i];
+        if (candidate.hash != wantedHash) {
             continue;
         }
-        const auto entryPath = lowercase(entry.path);
-        if (entryPath == wanted || lowercase(filename(entry.path)) == wanted) {
-            return &entry;
+        if (candidate.pathLen != wanted.size()) {
+            continue;
         }
-        const auto matchesSuffix = [&](const std::string& haystack, const std::string& needle) {
-            return haystack.size() > needle.size()
-                && haystack.compare(haystack.size() - needle.size(), needle.size(), needle) == 0
-                && haystack[haystack.size() - needle.size() - 1] == '/';
-        };
-        if (matchesSuffix(entryPath, wanted) || matchesSuffix(wanted, entryPath)) {
+        if (entries_[candidate.index].path == wanted) {
+            return &entries_[candidate.index];
+        }
+        const auto entryName = filename(entries_[candidate.index].path);
+        if (entryName == wanted) {
+            return &entries_[candidate.index];
+        }
+    }
+    const RarcEntry* suffixMatch = nullptr;
+    for (std::size_t i = 0; i < fileLookup_.size(); ++i) {
+        const auto& candidate = fileLookup_[i];
+        const auto& entry = entries_[candidate.index];
+        const auto entryPath = lowercase(entry.path);
+        const auto entryName = lowercase(filename(entry.path));
+        if (matchesSuffix(entryPath, wanted)) {
+            suffixMatch = &entry;
+        } else if (matchesSuffix(wanted, entryName)) {
             suffixMatch = &entry;
         }
     }
@@ -115,20 +126,71 @@ const RarcEntry* RarcArchive::find(std::string_view path) const {
 }
 
 bool RarcArchive::fileExists(std::string_view path) const {
-    return find(path) != nullptr;
+    const auto wanted = normalizePath(path);
+    if (wanted.empty()) {
+        return false;
+    }
+    const auto wantedHash = jmapHash(wanted);
+    for (std::size_t i = 0; i < fileLookup_.size(); ++i) {
+        const auto& candidate = fileLookup_[i];
+        if (candidate.hash != wantedHash) {
+            continue;
+        }
+        if (candidate.pathLen != wanted.size()) {
+            continue;
+        }
+        if (entries_[candidate.index].path == wanted) {
+            return true;
+        }
+        if (filename(entries_[candidate.index].path) == wanted) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string RarcArchive::normalizePath(std::string_view path) {
+    std::string out;
+    out.reserve(path.size());
+    for (std::size_t i = 0; i < path.size(); ++i) {
+        const unsigned char c = path[i];
+        if (c == '\\') {
+            out.push_back('/');
+        } else if (c == '/') {
+            if (out.empty() || out.back() == '/') {
+                continue;
+            }
+            out.push_back('/');
+        } else {
+            out.push_back(static_cast<char>(c));
+        }
+    }
+    while (!out.empty() && out.back() == '/') {
+        out.pop_back();
+    }
+    return out;
 }
 
 std::vector<std::string> RarcArchive::directories(std::string_view parent) const {
-    const auto wanted = requestedPath(parent);
+    const auto wanted = normalizePath(parent);
     std::vector<std::string> names;
-    for (const auto& entry : entries_) {
-        if (!entry.directory) {
-            continue;
+    if (wanted.empty()) {
+        for (const auto& entry : entries_) {
+            if (!entry.directory) {
+                continue;
+            }
+            if (lowercase(parentPath(entry.path)) == lowercase(rootName_)) {
+                names.push_back(filename(entry.path));
+            }
         }
-        const auto directory = lowercase(parentPath(entry.path));
-        const bool isChild = wanted.empty() ? directory == lowercase(rootName_) : directory == wanted;
-        if (isChild) {
-            names.push_back(filename(entry.path));
+    } else {
+        for (const auto& entry : entries_) {
+            if (!entry.directory) {
+                continue;
+            }
+            if (lowercase(parentPath(entry.path)) == wanted) {
+                names.push_back(filename(entry.path));
+            }
         }
     }
     std::sort(names.begin(), names.end());
@@ -136,16 +198,25 @@ std::vector<std::string> RarcArchive::directories(std::string_view parent) const
 }
 
 std::vector<std::string> RarcArchive::files(std::string_view parent) const {
-    const auto wanted = requestedPath(parent);
+    const auto wanted = normalizePath(parent);
     std::vector<std::string> names;
-    for (const auto& entry : entries_) {
-        if (entry.directory) {
-            continue;
+    if (wanted.empty()) {
+        for (const auto& entry : entries_) {
+            if (entry.directory) {
+                continue;
+            }
+            if (lowercase(parentPath(entry.path)) == lowercase(rootName_)) {
+                names.push_back(filename(entry.path));
+            }
         }
-        const auto directory = lowercase(parentPath(entry.path));
-        const bool isChild = wanted.empty() ? directory == lowercase(rootName_) : directory == wanted;
-        if (isChild) {
-            names.push_back(filename(entry.path));
+    } else {
+        for (const auto& entry : entries_) {
+            if (entry.directory) {
+                continue;
+            }
+            if (lowercase(parentPath(entry.path)) == wanted) {
+                names.push_back(filename(entry.path));
+            }
         }
     }
     std::sort(names.begin(), names.end());

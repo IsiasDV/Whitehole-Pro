@@ -121,8 +121,33 @@ float BcsvTable::getFloat(const BcsvRow& row, std::string_view name, float fallb
     return fallback;
 }
 
-std::int32_t BcsvTable::getInt(const BcsvRow& row, std::string_view name, std::int32_t fallback) const {
-    const auto index = fieldIndex(name);
+std::string BcsvTable::getStringById(const BcsvRow& row, std::uint32_t hash, std::string fallback) const {
+    const auto index = fieldIndex(hash);
+    if (!index || *index >= row.values.size()) {
+        return fallback;
+    }
+    if (const auto* text = std::get_if<std::string>(&row.values[*index])) {
+        return *text;
+    }
+    return toString(row.values[*index]);
+}
+
+float BcsvTable::getFloatById(const BcsvRow& row, std::uint32_t hash, float fallback) const {
+    const auto index = fieldIndex(hash);
+    if (!index || *index >= row.values.size()) {
+        return fallback;
+    }
+    if (const auto* value = std::get_if<float>(&row.values[*index])) {
+        return *value;
+    }
+    if (const auto* value = std::get_if<std::int32_t>(&row.values[*index])) {
+        return static_cast<float>(*value);
+    }
+    return fallback;
+}
+
+std::int32_t BcsvTable::getIntById(const BcsvRow& row, std::uint32_t hash, std::int32_t fallback) const {
+    const auto index = fieldIndex(hash);
     if (!index || *index >= row.values.size()) {
         return fallback;
     }
@@ -254,6 +279,11 @@ void BcsvTable::parse(const std::vector<std::uint8_t>& data) {
             }
         }
         rows_.push_back(std::move(row));
+    }
+
+    fieldLookup_.clear();
+    for (std::size_t i = 0; i < fields_.size(); ++i) {
+        fieldLookup_[fields_[i].hash] = i;
     }
 }
 

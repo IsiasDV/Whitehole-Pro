@@ -1,6 +1,7 @@
 #include "whitehole/smg/stage_archive.hpp"
 
 #include "whitehole/io/binary_file.hpp"
+#include "whitehole/smg/hash.hpp"
 
 #include <array>
 #include <stdexcept>
@@ -49,6 +50,17 @@ void StageArchive::loadTable(std::string_view path, std::string kind, std::strin
         table.kind = std::move(kind);
         table.layer = std::move(layer);
         table.table = BcsvTable(archive_->read(path), archive_->endian());
+        const auto nameHash = jmapHash("name");
+        const auto posXHash = jmapHash("pos_x");
+        const auto posYHash = jmapHash("pos_y");
+        const auto posZHash = jmapHash("pos_z");
+        const auto dirXHash = jmapHash("dir_x");
+        const auto dirYHash = jmapHash("dir_y");
+        const auto dirZHash = jmapHash("dir_z");
+        const auto scaleXHash = jmapHash("scale_x");
+        const auto scaleYHash = jmapHash("scale_y");
+        const auto scaleZHash = jmapHash("scale_z");
+
         for (std::size_t row = 0; row < table.table.rows().size(); ++row) {
             PlacementObject object;
             object.tableIndex = tables_.size();
@@ -56,13 +68,13 @@ void StageArchive::loadTable(std::string_view path, std::string kind, std::strin
             object.kind = table.kind;
             object.layer = table.layer;
             const auto& entry = table.table.rows()[row];
-            object.name = table.table.getString(entry, "name");
-            object.position = {table.table.getFloat(entry, "pos_x"), table.table.getFloat(entry, "pos_y"),
-                               table.table.getFloat(entry, "pos_z")};
-            object.rotation = {table.table.getFloat(entry, "dir_x"), table.table.getFloat(entry, "dir_y"),
-                               table.table.getFloat(entry, "dir_z")};
-            object.scale = {table.table.getFloat(entry, "scale_x", 1.0F), table.table.getFloat(entry, "scale_y", 1.0F),
-                            table.table.getFloat(entry, "scale_z", 1.0F)};
+            object.name = table.table.getStringById(entry, nameHash);
+            object.position = {table.table.getFloatById(entry, posXHash), table.table.getFloatById(entry, posYHash),
+                               table.table.getFloatById(entry, posZHash)};
+            object.rotation = {table.table.getFloatById(entry, dirXHash), table.table.getFloatById(entry, dirYHash),
+                               table.table.getFloatById(entry, dirZHash)};
+            object.scale = {table.table.getFloatById(entry, scaleXHash, 1.0F), table.table.getFloatById(entry, scaleYHash, 1.0F),
+                            table.table.getFloatById(entry, scaleZHash, 1.0F)};
             objects_.push_back(std::move(object));
         }
         tables_.push_back(std::move(table));

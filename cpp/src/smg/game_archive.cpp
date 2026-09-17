@@ -52,7 +52,7 @@ GameArchive::GameArchive(std::filesystem::path root) : filesystem_(std::move(roo
 }
 
 bool GameArchive::galaxyExists(std::string_view name) const {
-    return std::find(galaxies_.begin(), galaxies_.end(), name) != galaxies_.end();
+    return std::ranges::find(galaxies_, name) != galaxies_.end();
 }
 
 GalaxyArchive GameArchive::openGalaxy(std::string_view name) {

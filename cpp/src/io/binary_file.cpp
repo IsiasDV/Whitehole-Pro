@@ -187,18 +187,60 @@ void BinaryWriter::writeF32(float value) {
 }
 
 void BinaryWriter::writeBytes(const std::vector<std::uint8_t>& value) {
-    reserve(value.size());
-    std::copy(value.begin(), value.end(), data_.begin() + static_cast<std::ptrdiff_t>(position_));
-    position_ += value.size();
+    writeBytes(std::span{value});
 }
 
 void BinaryWriter::writeString(std::string_view value, bool nullTerminate) {
-    reserve(value.size() + (nullTerminate ? 1U : 0U));
-    for (const char character : value) {
-        data_[position_++] = static_cast<std::uint8_t>(character);
+    if (value.empty() && !nullTerminate) {
+        return;
     }
+    ensure(value.size() + (nullTerminate ? 1U : 0U));
+    std::memcpy(data_.data() + position_, value.data(), value.size());
+    position_ += value.size();
     if (nullTerminate) {
         data_[position_++] = 0;
+    }
+}
+
+void BinaryWriter::writeSpanRepeated(std::size_t count, std::uint8_t value) noexcept {
+    if (count == 0) {
+        return;
+    }
+    const auto required = position_ + count;
+    data_.resize(std::max(data_.size(), required), 0);
+    std::fill(data_.data() + position_, data_.data() + required, value);
+    position_ = required;
+}
+
+void BinaryWriter::patchU16(std::size_t offset, std::uint16_t value) const {
+    const std::uint8_t l = static_cast<std::uint8_t>(value);
+    const std::uint8_t h = static_cast<std::uint8_t>(value >> 8U);
+    if (endian_ == Endian::big) {
+        std::memcpy(data_.data() + offset, std::span<const std::uint8_t, 2>{h, l}.data(), 2);
+    } else {
+        std::memcpy(data_.data() + offset, std::span<const std::uint8_t, 2>{l, h}.data(), 2);
+    }
+}
+
+void BinaryWriter::patchU32(std::size_t offset, std::uint32_t value) const {
+    if (endian_ == Endian::big) {
+        data_[offset] = static_cast<std::uint8_t>(value >> 24U);
+        data_[offset + 1] = static_cast<std::uint8_t>(value >> 16U);
+        data_[offset + 2] = static_cast<std::uint8_t>(value >> 8U);
+        data_[offset + 3] = static_cast<std::uint8_t>(value);
+    } else {
+        data_[offset] = static_cast<std::uint8_t>(value);
+        data_[offset + 1] = static_cast<std::uint8_t>(value >> 8U);
+        data_[offset + 2] = static_cast<std::uint8_t>(value >> 16U);
+        data_[offset + 3] = static_cast<std::uint8_t>(value >> 24U);
+    }
+}
+
+void BinaryWriter::align32() {
+    constexpr std::size_t mask = 31;
+    const std::size_t pad = (mask - (position_ & mask)) & mask;
+    if (pad != 0) {
+        writeSpanRepeated(pad, 0);
     }
 }
 
