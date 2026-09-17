@@ -13,6 +13,25 @@ What we plan to include:
 
 Also don't worry about preinstalling anything weird like Java, old technology anyways, 'cause we're gonna have this install and work out of the box baby!
 
+## Build the native C++ app
+
+The active rewrite lives under `cpp/` and builds with CMake 3.16+ and a C++20 compiler. Java is not required.
+
+```bat
+cmake -S . -B build
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+build\Release\whitehole-neo.exe
+```
+
+On Windows, launching `whitehole-neo` with no arguments opens the editor. You can also open a bundled template map from the command line:
+
+```bat
+build\Release\whitehole-neo.exe map objects data\templates\SMG2BigGalaxyMap.arc
+```
+
+Full CLI usage and the migration plan are in [docs/CPP_REWRITE.md](docs/CPP_REWRITE.md).
+
 ## Controls
 - Left Click: Select/Deselect object (hold <kbd>Shift</kbd> or <kbd>Ctrl</kbd> to select multiple)
 - Left Click Drag: Pan camera, Move object

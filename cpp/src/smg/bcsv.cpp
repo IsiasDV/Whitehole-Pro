@@ -1,9 +1,12 @@
 #include "whitehole/smg/bcsv.hpp"
 
+#include "whitehole/smg/hash.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <type_traits>
@@ -78,6 +81,79 @@ BcsvTable::BcsvTable(std::vector<std::uint8_t> data, io::Endian endian) : endian
 
 BcsvTable BcsvTable::open(const std::filesystem::path& path, io::Endian endian) {
     return BcsvTable(io::readFile(path), endian);
+}
+
+std::optional<std::size_t> BcsvTable::fieldIndex(std::uint32_t hash) const {
+    for (std::size_t index = 0; index < fields_.size(); ++index) {
+        if (fields_[index].hash == hash) {
+            return index;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::size_t> BcsvTable::fieldIndex(std::string_view name) const {
+    return fieldIndex(jmapHash(name));
+}
+
+std::string BcsvTable::getString(const BcsvRow& row, std::string_view name, std::string fallback) const {
+    const auto index = fieldIndex(name);
+    if (!index || *index >= row.values.size()) {
+        return fallback;
+    }
+    if (const auto* text = std::get_if<std::string>(&row.values[*index])) {
+        return *text;
+    }
+    return toString(row.values[*index]);
+}
+
+float BcsvTable::getFloat(const BcsvRow& row, std::string_view name, float fallback) const {
+    const auto index = fieldIndex(name);
+    if (!index || *index >= row.values.size()) {
+        return fallback;
+    }
+    if (const auto* value = std::get_if<float>(&row.values[*index])) {
+        return *value;
+    }
+    if (const auto* value = std::get_if<std::int32_t>(&row.values[*index])) {
+        return static_cast<float>(*value);
+    }
+    return fallback;
+}
+
+std::int32_t BcsvTable::getInt(const BcsvRow& row, std::string_view name, std::int32_t fallback) const {
+    const auto index = fieldIndex(name);
+    if (!index || *index >= row.values.size()) {
+        return fallback;
+    }
+    return std::visit([&](const auto& value) -> std::int32_t {
+        using Item = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<Item, std::string> || std::is_same_v<Item, float>) {
+            return fallback;
+        } else {
+            return static_cast<std::int32_t>(value);
+        }
+    }, row.values[*index]);
+}
+
+void BcsvTable::setString(BcsvRow& row, std::string_view name, std::string value) {
+    const auto index = fieldIndex(name);
+    if (!index || *index >= row.values.size()) {
+        return;
+    }
+    if (std::holds_alternative<std::string>(row.values[*index])) {
+        row.values[*index] = std::move(value);
+    }
+}
+
+void BcsvTable::setFloat(BcsvRow& row, std::string_view name, float value) {
+    const auto index = fieldIndex(name);
+    if (!index || *index >= row.values.size()) {
+        return;
+    }
+    if (std::holds_alternative<float>(row.values[*index])) {
+        row.values[*index] = value;
+    }
 }
 
 void BcsvTable::parse(const std::vector<std::uint8_t>& data) {

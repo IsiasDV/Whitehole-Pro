@@ -28,7 +28,12 @@ public:
     [[nodiscard]] bool wasCompressed() const noexcept { return wasCompressed_; }
     [[nodiscard]] std::string_view rootName() const noexcept { return rootName_; }
     [[nodiscard]] const std::vector<RarcEntry>& entries() const noexcept { return entries_; }
+    [[nodiscard]] const RarcEntry* find(std::string_view path) const;
+    [[nodiscard]] bool fileExists(std::string_view path) const;
+    [[nodiscard]] std::vector<std::string> directories(std::string_view parent) const;
+    [[nodiscard]] std::vector<std::string> files(std::string_view parent) const;
     [[nodiscard]] std::vector<std::uint8_t> read(const RarcEntry& entry) const;
+    [[nodiscard]] std::vector<std::uint8_t> read(std::string_view path) const;
     void replace(std::string_view path, std::vector<std::uint8_t> data);
     [[nodiscard]] std::vector<std::uint8_t> serialize(bool compress) const;
 

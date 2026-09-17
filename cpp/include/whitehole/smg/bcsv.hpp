@@ -5,7 +5,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -48,6 +50,16 @@ public:
     [[nodiscard]] std::vector<BcsvField>& fields() noexcept { return fields_; }
     [[nodiscard]] const std::vector<BcsvRow>& rows() const noexcept { return rows_; }
     [[nodiscard]] std::vector<BcsvRow>& rows() noexcept { return rows_; }
+
+    [[nodiscard]] std::optional<std::size_t> fieldIndex(std::string_view name) const;
+    [[nodiscard]] std::optional<std::size_t> fieldIndex(std::uint32_t hash) const;
+    [[nodiscard]] std::string getString(const BcsvRow& row, std::string_view name,
+                                        std::string fallback = {}) const;
+    [[nodiscard]] float getFloat(const BcsvRow& row, std::string_view name, float fallback = 0.0F) const;
+    [[nodiscard]] std::int32_t getInt(const BcsvRow& row, std::string_view name,
+                                      std::int32_t fallback = 0) const;
+    void setString(BcsvRow& row, std::string_view name, std::string value);
+    void setFloat(BcsvRow& row, std::string_view name, float value);
 
     [[nodiscard]] std::vector<std::uint8_t> serialize() const;
 

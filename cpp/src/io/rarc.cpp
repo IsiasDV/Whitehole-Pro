@@ -1,6 +1,7 @@
 #include "whitehole/io/rarc.hpp"
 
 #include "whitehole/io/yaz0.hpp"
+#include "whitehole/util/text.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -72,6 +73,10 @@ std::string lowercase(std::string_view value) {
     return result;
 }
 
+std::string requestedPath(std::string_view path) {
+    return lowercase(whitehole::util::trimSlashes(whitehole::util::replaceSlashes(path)));
+}
+
 } // namespace
 
 RarcArchive::RarcArchive(std::vector<std::uint8_t> bytes)
@@ -81,6 +86,78 @@ RarcArchive::RarcArchive(std::vector<std::uint8_t> bytes)
 
 RarcArchive RarcArchive::open(const std::filesystem::path& path) {
     return RarcArchive(readFile(path));
+}
+
+const RarcEntry* RarcArchive::find(std::string_view path) const {
+    const auto wanted = requestedPath(path);
+    if (wanted.empty()) {
+        return nullptr;
+    }
+    const RarcEntry* suffixMatch = nullptr;
+    for (const auto& entry : entries_) {
+        if (entry.directory) {
+            continue;
+        }
+        const auto entryPath = lowercase(entry.path);
+        if (entryPath == wanted || lowercase(filename(entry.path)) == wanted) {
+            return &entry;
+        }
+        const auto matchesSuffix = [&](const std::string& haystack, const std::string& needle) {
+            return haystack.size() > needle.size()
+                && haystack.compare(haystack.size() - needle.size(), needle.size(), needle) == 0
+                && haystack[haystack.size() - needle.size() - 1] == '/';
+        };
+        if (matchesSuffix(entryPath, wanted) || matchesSuffix(wanted, entryPath)) {
+            suffixMatch = &entry;
+        }
+    }
+    return suffixMatch;
+}
+
+bool RarcArchive::fileExists(std::string_view path) const {
+    return find(path) != nullptr;
+}
+
+std::vector<std::string> RarcArchive::directories(std::string_view parent) const {
+    const auto wanted = requestedPath(parent);
+    std::vector<std::string> names;
+    for (const auto& entry : entries_) {
+        if (!entry.directory) {
+            continue;
+        }
+        const auto directory = lowercase(parentPath(entry.path));
+        const bool isChild = wanted.empty() ? directory == lowercase(rootName_) : directory == wanted;
+        if (isChild) {
+            names.push_back(filename(entry.path));
+        }
+    }
+    std::sort(names.begin(), names.end());
+    return names;
+}
+
+std::vector<std::string> RarcArchive::files(std::string_view parent) const {
+    const auto wanted = requestedPath(parent);
+    std::vector<std::string> names;
+    for (const auto& entry : entries_) {
+        if (entry.directory) {
+            continue;
+        }
+        const auto directory = lowercase(parentPath(entry.path));
+        const bool isChild = wanted.empty() ? directory == lowercase(rootName_) : directory == wanted;
+        if (isChild) {
+            names.push_back(filename(entry.path));
+        }
+    }
+    std::sort(names.begin(), names.end());
+    return names;
+}
+
+std::vector<std::uint8_t> RarcArchive::read(std::string_view path) const {
+    const auto* entry = find(path);
+    if (entry == nullptr) {
+        throw std::runtime_error("RARC file does not exist: " + std::string(path));
+    }
+    return read(*entry);
 }
 
 void RarcArchive::parse() {
@@ -230,9 +307,12 @@ std::vector<std::uint8_t> RarcArchive::read(const RarcEntry& entry) const {
 }
 
 void RarcArchive::replace(std::string_view path, std::vector<std::uint8_t> data) {
-    const auto wanted = lowercase(path);
+    const auto* entry = find(path);
+    if (entry == nullptr) {
+        throw std::runtime_error("RARC file does not exist: " + std::string(path));
+    }
     for (std::size_t index = 0; index < entries_.size(); ++index) {
-        if (!entries_[index].directory && lowercase(entries_[index].path) == wanted) {
+        if (&entries_[index] == entry) {
             replacements_[index] = std::move(data);
             entries_[index].size = replacements_[index]->size();
             return;

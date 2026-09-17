@@ -1,10 +1,13 @@
+#include "whitehole/db/name_table.hpp"
 #include "whitehole/io/binary_file.hpp"
 #include "whitehole/io/directory_filesystem.hpp"
 #include "whitehole/io/rarc.hpp"
 #include "whitehole/io/yaz0.hpp"
 #include "whitehole/math/geometry.hpp"
 #include "whitehole/smg/bcsv.hpp"
+#include "whitehole/smg/game_archive.hpp"
 #include "whitehole/smg/hash.hpp"
+#include "whitehole/smg/stage_archive.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -383,6 +386,44 @@ void testArchiveTableEdit() {
            "edited BCSV value did not survive archive recompression");
 }
 
+void testNameTables() {
+    whitehole::db::NameTable galaxies;
+    galaxies.loadJson(std::filesystem::path(WHITEHOLE_SOURCE_DIR) / "data" / "galaxies.json");
+    expect(galaxies.displayName("EggStarGalaxy").find("Good Egg") != std::string::npos,
+           "galaxy display names did not load");
+}
+
+void testStageAndGameModels() {
+    const auto templates = std::filesystem::path(WHITEHOLE_SOURCE_DIR) / "data" / "templates";
+    auto stage = whitehole::smg::StageArchive::openMapFile(templates / "SMG2BigGalaxyMap.arc");
+    expect(!stage.objects().empty(), "template map loaded no placement objects");
+    expect(stage.objects().size() >= 10, "template map loaded fewer objects than expected");
+    auto& object = stage.objects().front();
+    const auto original = object.position.x;
+    object.position.x = original + 12.5F;
+    TemporaryDirectory output;
+    const auto savedPath = output.path / "edited-map.arc";
+    stage.saveTo(savedPath);
+    const auto reloaded = whitehole::smg::StageArchive::openMapFile(savedPath);
+    expect(!reloaded.objects().empty(), "saved map reloaded no objects");
+    expect(std::abs(reloaded.objects().front().position.x - (original + 12.5F)) < 0.01F,
+           "edited object position did not survive save");
+
+    TemporaryDirectory workspace;
+    std::filesystem::create_directories(workspace.path / "SystemData");
+    std::filesystem::create_directories(workspace.path / "StageData" / "TestGalaxy");
+    whitehole::io::writeFile(workspace.path / "SystemData" / "ObjNameTable.arc", {0x52, 0x41, 0x52, 0x43});
+    std::filesystem::copy_file(templates / "SMG2BigGalaxyScenario.arc",
+                               workspace.path / "StageData" / "TestGalaxy" / "TestGalaxyScenario.arc");
+    std::filesystem::copy_file(templates / "SMG2BigGalaxyMap.arc",
+                               workspace.path / "StageData" / "TestGalaxy" / "TestGalaxyMap.arc");
+    whitehole::smg::GameArchive game(workspace.path);
+    expect(game.gameType() == 2, "synthetic workspace was not detected as SMG2");
+    expect(game.galaxyExists("TestGalaxy"), "synthetic galaxy was not listed");
+    const auto galaxy = game.openGalaxy("TestGalaxy");
+    expect(!galaxy.zones().empty(), "synthetic galaxy has no zones");
+}
+
 } // namespace
 
 int main() {
@@ -396,6 +437,8 @@ int main() {
         testRarcEndianness();
         testProjectArchives();
         testArchiveTableEdit();
+        testNameTables();
+        testStageAndGameModels();
         std::cout << "All Whitehole native core tests passed\n";
         return 0;
     } catch (const std::exception& error) {
