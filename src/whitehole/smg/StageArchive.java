@@ -59,16 +59,23 @@ public class StageArchive {
             mapPath = String.format("/StageData/%s.arc", stageName);
             soundPath = null;
             designPath = null;
+            
+            if (filesystem.fileExists(String.format("/StageData/%sAssist.arc", stageName, stageName))) 
+                assistPath = String.format("/StageData/%sAssist.arc", stageName, stageName);
+            else 
+                assistPath = null;
         }
         else {
             mapPath = String.format("/StageData/%s/%sMap.arc", stageName, stageName);
             soundPath = String.format("/StageData/%s/%sSound.arc", stageName, stageName);
             designPath = String.format("/StageData/%s/%sDesign.arc", stageName, stageName);
+            
+            if (filesystem.fileExists(String.format("/StageData/%s/%sAssist.arc", stageName, stageName))) 
+                assistPath = String.format("/StageData/%s/%sAssist.arc", stageName, stageName);
+            else 
+                assistPath = null;
         }
-        if (filesystem.fileExists(String.format("/StageData/%s/%sAssist.arc", stageName, stageName))) 
-            assistPath = String.format("/StageData/%s/%sAssist.arc", stageName, stageName);
-        else 
-            assistPath = null;
+        
         
         objects = new LinkedHashMap(17);
         zones = new LinkedHashMap(17);

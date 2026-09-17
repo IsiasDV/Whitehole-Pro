@@ -31,8 +31,8 @@ public class GalaxyArchive {
         Bcsv zonesbcsv = new Bcsv(scenario.openFile(String.format("/%1$sScenario/ZoneList.bcsv", galaxyName)), scenario.isBigEndian());
         for (Bcsv.Entry entry : zonesbcsv.entries) {
             zoneList.add((String)entry.get("ZoneName"));
-            if (filesystem.fileExists(String.format("/StageData/%s/%sAssist.arc", (String)entry.get("ZoneName"), (String)entry.get("ZoneName")))) 
-                zoneList.add((String)entry.get("ZoneName") + "Assist");
+            //if (filesystem.fileExists(String.format("/StageData/%s/%sAssist.arc", (String)entry.get("ZoneName"), (String)entry.get("ZoneName")))) 
+            //    zoneList.add((String)entry.get("ZoneName") + "Assist");
                 
         }
         zonesbcsv.close();

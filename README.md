@@ -1,22 +1,17 @@
-# Whitehole Neo
+# Whitehole Pro
+## The latest and greatest cutting-edge Whitehole and we can do this 'cause Whitehole Neo is open-source hahaha.
+### Yes, AI is used in this project. So what? Oh are you complaining that it's not human-written code? Womp. WOMP!
+Look at this image, look it makes us look so techy and advanced:
 ![Editing Flipswitch and Flip-Swap Galaxy](https://github.com/SMGCommunity/Whitehole-Neo/blob/master/ExampleImage.png)
-**Whitehole Neo** is a rewrite of *Whitehole*, which was a level editor for *Super Mario Galaxy* and *Super Mario Galaxy 2* that is over 10 years old.
-This goal with this version is to make the program more stable and to be properly maintained.
-It removes a lot of unused code and broken features that were introduced between versions 1.4 through 1.7, and improves on Despaghettification.
-Several outdated or questionable parts of the code have been upgraded.
 
-Major new additions include:
-- Support for the new [Object Database](https://github.com/SMGCommunity/galaxydatabase)
-- Simple galaxy names that are displayed on the main window
-- A reworked and simple Worldmap editor for SMG2
-- A completely new Light Mode and Dark Mode UI
-- The ability to Undo your actions
-- Copy & Paste for all objects
-- Vastly improved rendering capabilities
-- Full compatability with all of SMG1's stages
-- Tons of bugs introduced in older versions of Whitehole have been fixed
+> **Better than Whitehole Neo:** Whitehole Neo is cool and all that, right? Yeah, we're gonna take everything from Whitehole Neo ('cause it's open source) and make it BETTER with Claude. We'll overhaul the user interface, have it optimize the code, and make it incredibly user friendly. Might even include tutorials within the application.
 
-This is intended for Java 11, though the program runs fine on newer Java versions as well, but requires the tool to be started using this command: ```java --add-exports=java.desktop/sun.awt=ALL-UNNAMED --add-opens=java.desktop/sun.awt.windows=ALL-UNNAMED -jar Whitehole.jar```.<br/>Alternatively, run the included `.bat` file.
+**We're competent.** Unlike many of the BABIES that reside in Luma's Worshop, we are competent individuals. Yes, our language here seems very ironic. We know that!
+
+What we plan to include:
+- Something cool
+
+Also don't worry about preinstalling anything weird like Java, old technology anyways, 'cause we're gonna have this install and work out of the box baby!
 
 ## Controls
 - Left Click: Select/Deselect object (hold <kbd>Shift</kbd> or <kbd>Ctrl</kbd> to select multiple)
