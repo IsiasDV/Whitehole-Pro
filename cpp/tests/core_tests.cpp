@@ -1,5 +1,11 @@
 ﻿#include "whitehole/app/settings.hpp"
+#include "whitehole/db/data_holder.hpp"
 #include "whitehole/db/name_table.hpp"
+#include "whitehole/db/hints.hpp"
+#include "whitehole/db/areamanagerlimits.hpp"
+#include "whitehole/db/shortcuts.hpp"
+#include "whitehole/db/modelsubstitutions.hpp"
+#include "whitehole/db/specialrenderers.hpp"
 #include "whitehole/db/object_db.hpp"
 #include "whitehole/io/binary_file.hpp"
 #include "whitehole/io/directory_filesystem.hpp"
@@ -696,6 +702,91 @@ void testObjectDatabase() {
     expect(db.displayName("Missing") == "\"Missing\"", "objectdb fallback wrong");
 }
 
+void testDataHolderRoundTrip() {
+    TemporaryDirectory temp;
+    const auto base = temp.path / "base";
+    std::filesystem::create_directories(base);
+    {
+        std::ofstream out(base / "test.json");
+        out << "{\"Items\": [\"a\",\"b\"]}";
+    }
+    whitehole::db::DataHolderBase holder("test.json", "/hints.json", true);
+    holder.setBaseGameRoot(base);
+    holder.initBaseGame();
+            expect(holder.dataPresent(), "base game data should be present");
+    expect(holder.root().at("Items").asArray().size() == 2, "base root should parse");
+}
+
+void testDbHelpersRoundTrip() {
+        TemporaryDirectory temp;
+    const auto base = temp.path / "base";
+    std::filesystem::create_directories(base / "data");
+
+    // Hints: top-level "Hints" array with Game field for filtering.
+    {
+        std::ofstream out(base / "data" / "hints.json");
+        out << "{\"Hints\":[{\"Game\":0,\"Hint\":\"hello\",\"Name\":\"Test\"},{\"Game\":1,\"Hint\":\"smg1only\"}]}";
+    }
+    whitehole::db::Hints hints;
+    hints.setBaseGameRoot(base);
+    hints.initBaseGame();
+    hints.load(2);
+    expect(hints.hints().size() == 1, "hints should load one entry for SMG2");
+    expect(hints.hints()[0].hint == "hello", "hints hint wrong");
+    hints.load(1);
+    expect(hints.hints().size() == 2, "hints should load two entries for SMG1");
+
+    // AreaManagerLimits: aliases + limits per game.
+    {
+        std::ofstream out(base / "data" / "areamanagerlimits.json");
+        out << "{\"AreaManagerAliases\":{\"SMG1\":{\"Cube\":\"Area\"}},\"AreaManagers\":{\"SMG1\":{\"Area\":\"5\"}}}";
+    }
+    whitehole::db::AreaManagerLimits limits;
+    limits.setBaseGameRoot(base);
+    limits.initBaseGame();
+    limits.load(1);
+    expect(limits.resolveAlias("Cube") == "Area", "alias resolve wrong");
+    expect(limits.resolveAlias("Missing") == "Missing", "alias passthrough wrong");
+    expect(limits.limitFor("Cube") == "5", "limit via alias wrong");
+    expect(limits.limitFor("Missing") == "", "limit missing empty");
+
+    // Shortcuts: flat root.
+    {
+        std::ofstream out(base / "data" / "shortcuts.json");
+        out << "{\"save\":\"Ctrl+S\"}";
+    }
+    whitehole::db::Shortcuts shortcuts;
+    shortcuts.setBaseGameRoot(base);
+    shortcuts.initBaseGame();
+    shortcuts.load();
+    expect(shortcuts.get("save") == "Ctrl+S", "shortcut get wrong");
+    expect(shortcuts.get("missing") == "", "shortcut missing empty");
+
+    // ModelSubstitutions: flat lowercase-keyed map.
+    {
+        std::ofstream out(base / "data" / "modelsubstitutions.json");
+        out << "{\"dumptr\":\"Kinopio\"}";
+    }
+    whitehole::db::ModelSubstitutions subs;
+    subs.setBaseGameRoot(base);
+    subs.initBaseGame();
+    subs.load();
+    expect(subs.substitute("Dumptr") == "Kinopio", "case-insensitive substitute");
+    expect(subs.substitute("missing") == "", "no substitute empty");
+
+    // SpecialRenderers: array with ObjectName/ClassName + RendererType.
+    {
+        std::ofstream out(base / "data" / "specialrenderers.json");
+        out << "{\"SpecialRenderers\":[{\"ObjectName\":\"GoalA\",\"RendererType\":\"Special\"}]}";
+    }
+    whitehole::db::SpecialRenderers special;
+    special.setBaseGameRoot(base);
+    special.initBaseGame();
+    special.load();
+    expect(special.lookup("GoalA") == "Special", "special renderer lookup");
+    expect(special.lookup("Unknown") == "", "special renderer unknown empty");
+}
+
 } // namespace
 
 int main() {
@@ -717,6 +808,8 @@ int main() {
         testJsonRoundTrip();
         testSettingsRoundTrip();
         testObjectDatabase();
+        testDataHolderRoundTrip();
+        testDbHelpersRoundTrip();
         std::cout << "All Whitehole native core tests passed\n";
         return 0;
     } catch (const std::exception& error) {

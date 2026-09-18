@@ -51,6 +51,12 @@ add_library(whitehole_core
     cpp/src/app/settings.cpp
     cpp/src/db/name_table.cpp
     cpp/src/db/object_db.cpp
+        cpp/src/db/data_holder.cpp
+    cpp/src/db/hints.cpp
+    cpp/src/db/areamanagerlimits.cpp
+    cpp/src/db/shortcuts.cpp
+    cpp/src/db/modelsubstitutions.cpp
+    cpp/src/db/specialrenderers.cpp
     cpp/src/io/binary_file.cpp
     cpp/src/io/directory_filesystem.cpp
     cpp/src/io/rarc.cpp
