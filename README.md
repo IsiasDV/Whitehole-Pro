@@ -8,7 +8,7 @@
 
 Look at this image, look it makes us look so techy and advanced:
 
-![Editing Flipswitch and Flip-Swap Galaxy](https://github.com/SMGCommunity/Whitehole-Neo/blob/master/ExampleImage.jpg)
+![Editing Flipswitch and Flip-Swap Galaxy](https://github.com/IsiasDV/Whitehole-Pro/blob/master/ExampleImage.jpg)
 
 Whitehole Pro is a friendly editor for Super Mario Galaxy 1 & 2 level files.
 It opens `.arc` map files and extracted game folders, lets you browse objects,
