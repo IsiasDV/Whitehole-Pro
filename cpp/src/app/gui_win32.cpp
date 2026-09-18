@@ -13,8 +13,12 @@
 
 #include "whitehole/app/application.hpp"
 
+#include "whitehole/app/settings.hpp"
 #include "whitehole/db/name_table.hpp"
+#include "whitehole/db/object_db.hpp"
 #include "whitehole/render/viewport_scene.hpp"
+#include "whitehole/util/json.hpp"
+#include "whitehole/util/text.hpp"
 #include "whitehole/render/viewport_win32.hpp"
 #include "whitehole/smg/game_archive.hpp"
 #include "whitehole/smg/stage_archive.hpp"
@@ -62,6 +66,10 @@ constexpr int kIdScaleX = 1111;
 constexpr int kIdScaleY = 1112;
 constexpr int kIdScaleZ = 1113;
 constexpr int kIdApply = 1120;
+constexpr int kIdRecentBase = 1200;
+constexpr int kIdRecentMax = 1208;
+constexpr int kIdSearch = 1210;
+constexpr int kIdToggleDark = 1220;
 constexpr int kIdStatus = 1121;
 constexpr int kIdViewport = 1122;
 
@@ -208,13 +216,21 @@ struct EditorState {
     std::filesystem::path dataRoot;
     db::NameTable galaxyNames;
     db::NameTable zoneNames;
+    db::ObjectDatabase objectDb;
+    Settings settings;
     std::optional<smg::GameArchive> game;
     std::vector<std::string> galaxies;
     std::vector<std::string> zones;
     std::optional<smg::StageArchive> stage;
+    std::string filter;
+    // Visible object rows after the search filter; maps list index -> stage index.
+    std::vector<std::size_t> visibleObjects;
+    HWND window{nullptr};
+    HMENU fileMenu{nullptr};
     HWND galaxiesList{nullptr};
     HWND zonesList{nullptr};
     HWND objectsList{nullptr};
+    HWND searchEdit{nullptr};
     HWND nameEdit{nullptr};
     HWND posX{nullptr};
     HWND posY{nullptr};
@@ -244,6 +260,15 @@ struct EditorState {
 
 // Keeps every control anchored while the window is resized: three list columns
 // on top, the 3D viewport in the middle, fixed transform rows at the bottom.
+void setStatus(EditorState& state, std::string_view text);
+void applyTheme(EditorState& state) {
+    // Theme switch hook: force a repaint; themed controls come from the v6
+    // Common Controls manifest. Full dark palettes stay in applyModernTheme().
+    if (state.window != nullptr) {
+        InvalidateRect(state.window, nullptr, TRUE);
+    }
+}
+
 void layoutEditor(EditorState& state, HWND window) {
     RECT client{};
     GetClientRect(window, &client);
@@ -274,7 +299,8 @@ void layoutEditor(EditorState& state, HWND window) {
     MoveWindow(state.zonesLabel, secondX, margin, columnWidth, 18, TRUE);
     MoveWindow(state.zonesList, secondX, listTop, columnWidth, listHeight, TRUE);
     MoveWindow(state.objectsLabel, thirdX, margin, thirdWidth, 18, TRUE);
-    MoveWindow(state.objectsList, thirdX, listTop, thirdWidth, listHeight, TRUE);
+    MoveWindow(state.searchEdit, thirdX, listTop, thirdWidth, 24, TRUE);
+    MoveWindow(state.objectsList, thirdX, listTop + 28, thirdWidth, listHeight - 28, TRUE);
 
     const auto nameWidth = std::clamp(secondX - 76, 140, 224);
     MoveWindow(state.nameLabel, margin, editorTop + 4, 50, 18, TRUE);
@@ -357,13 +383,62 @@ void fillList(HWND list, const std::vector<std::string>& items, const db::NameTa
 
 void refreshObjects(EditorState& state) {
     clearList(state.objectsList);
+    state.visibleObjects.clear();
     if (!state.stage) {
         return;
     }
-    for (const auto& object : state.stage->objects()) {
-        const auto label = object.kind + "/" + object.layer + "  " + object.name;
+    // Defer viewport rebuilds while bulk-adding rows (10k+ objects).
+    SendMessageW(state.objectsList, WM_SETREDRAW, FALSE, 0);
+    const std::string needle = whitehole::util::toLower(state.filter);
+    const auto& objects = state.stage->objects();
+    for (std::size_t i = 0; i < objects.size(); ++i) {
+        const auto& object = objects[i];
+        if (!needle.empty()) {
+            const std::string hay = whitehole::util::toLower(object.name + " " + object.kind + " " + object.layer);
+            if (hay.find(needle) == std::string::npos) continue;
+        }
+        state.visibleObjects.push_back(i);
+        std::string label = object.kind + "/" + object.layer + "  " + object.name;
+        const std::string friendly = state.objectDb.displayName(object.name);
+        if (friendly != "\"" + object.name + "\"") label += "  (" + friendly + ")";
         SendMessageW(state.objectsList, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(utf8ToWide(label).c_str()));
     }
+    SendMessageW(state.objectsList, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(state.objectsList, nullptr, TRUE);
+}
+
+[[nodiscard]] int listToStageIndex(EditorState& state, int listIndex) {
+    if (listIndex < 0 || static_cast<std::size_t>(listIndex) >= state.visibleObjects.size()) return -1;
+    return static_cast<int>(state.visibleObjects[static_cast<std::size_t>(listIndex)]);
+}
+
+[[nodiscard]] int stageToListIndex(EditorState& state, std::size_t stageIndex) {
+    for (std::size_t i = 0; i < state.visibleObjects.size(); ++i) {
+        if (state.visibleObjects[i] == stageIndex) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+void rebuildRecentMenu(EditorState& state) {
+    if (state.fileMenu == nullptr) return;
+    // Clear old recent entries (keep static items, recent block lives at the end).
+    for (int id = kIdRecentBase; id <= kIdRecentMax; ++id) {
+        RemoveMenu(state.fileMenu, static_cast<UINT>(id), MF_BYCOMMAND);
+    }
+    const auto& recent = state.settings.recentMaps;
+    if (recent.empty()) return;
+    AppendMenuW(state.fileMenu, MF_SEPARATOR, 0, nullptr);
+    int id = kIdRecentBase;
+    for (const auto& entry : recent) {
+        if (id > kIdRecentMax) break;
+        AppendMenuW(state.fileMenu, MF_STRING, static_cast<UINT_PTR>(id++), utf8ToWide(entry).c_str());
+    }
+}
+
+void rememberMap(EditorState& state, const std::filesystem::path& path) {
+    state.settings.pushRecentMap(path.string());
+    state.settings.save();
+    rebuildRecentMenu(state);
 }
 
 void showObject(EditorState& state, int index);
@@ -395,11 +470,12 @@ void refreshViewport(EditorState& state, bool frame) {
     }
 }
 
-void showObject(EditorState& state, int index) {
-    if (!state.stage || index < 0 || static_cast<std::size_t>(index) >= state.stage->objects().size()) {
+void showObject(EditorState& state, int stageIndex) {
+    if (!state.stage || stageIndex < 0 ||
+        static_cast<std::size_t>(stageIndex) >= state.stage->objects().size()) {
         return;
     }
-    const auto& object = state.stage->objects()[static_cast<std::size_t>(index)];
+    const auto& object = state.stage->objects()[static_cast<std::size_t>(stageIndex)];
     setWindowText(state.nameEdit, object.name);
     setWindowText(state.posX, formatFloat(object.position.x));
     setWindowText(state.posY, formatFloat(object.position.y));
@@ -413,11 +489,13 @@ void showObject(EditorState& state, int index) {
 }
 
 void applyObject(EditorState& state) {
-    const auto index = static_cast<int>(SendMessageW(state.objectsList, LB_GETCURSEL, 0, 0));
-    if (!state.stage || index < 0 || static_cast<std::size_t>(index) >= state.stage->objects().size()) {
+    const auto listIndex = static_cast<int>(SendMessageW(state.objectsList, LB_GETCURSEL, 0, 0));
+    const int stageIndex = listToStageIndex(state, listIndex);
+    if (!state.stage || stageIndex < 0 ||
+        static_cast<std::size_t>(stageIndex) >= state.stage->objects().size()) {
         return;
     }
-    auto& object = state.stage->objects()[static_cast<std::size_t>(index)];
+    auto& object = state.stage->objects()[static_cast<std::size_t>(stageIndex)];
     object.name = windowText(state.nameEdit);
     object.position.x = parseFloat(state.posX, object.position.x);
     object.position.y = parseFloat(state.posY, object.position.y);
@@ -430,8 +508,9 @@ void applyObject(EditorState& state) {
     object.scale.z = parseFloat(state.scaleZ, object.scale.z);
     setStatus(state, "Updated " + object.name + " in memory. Save the zone to write the archive.");
     refreshObjects(state);
-    SendMessageW(state.objectsList, LB_SETCURSEL, static_cast<WPARAM>(index), 0);
-    state.viewportSelected = static_cast<std::size_t>(index);
+    const int newList = stageToListIndex(state, static_cast<std::size_t>(stageIndex));
+    SendMessageW(state.objectsList, LB_SETCURSEL, static_cast<WPARAM>(newList), 0);
+    state.viewportSelected = static_cast<std::size_t>(stageIndex);
     if (state.viewportReady) {
         state.viewport.setSelected(state.viewportSelected);
     }
@@ -448,7 +527,7 @@ void syncViewportSelection(EditorState& state, std::optional<std::size_t> select
     }
     if (selected.has_value() && state.stage && *selected < state.stage->objects().size()) {
         state.syncingSelection = true;
-        SendMessageW(state.objectsList, LB_SETCURSEL, static_cast<WPARAM>(*selected), 0);
+        SendMessageW(state.objectsList, LB_SETCURSEL, static_cast<WPARAM>(stageToListIndex(state, *selected)), 0);
         showObject(state, static_cast<int>(*selected));
         state.syncingSelection = false;
     }
@@ -458,9 +537,12 @@ void openMap(EditorState& state, const std::filesystem::path& path) {
     state.stage = smg::StageArchive::openMapFile(path);
     state.zones = {state.stage->stageName()};
     fillList(state.zonesList, state.zones, nullptr);
+    state.filter.clear();
+    if (state.searchEdit != nullptr) setWindowText(state.searchEdit, "");
     refreshObjects(state);
     syncViewportSelection(state, std::nullopt);
     refreshViewport(state, true);
+    rememberMap(state, path);
     setStatus(state, "Opened map archive with " + std::to_string(state.stage->objects().size()) + " objects.");
 }
 
@@ -473,6 +555,8 @@ void openGame(EditorState& state, const std::filesystem::path& path) {
     state.galaxies = state.game->galaxies();
     state.zones = state.game->zones();
     state.stage.reset();
+    state.settings.lastGameDir = path.string();
+    state.settings.save();
     fillList(state.galaxiesList, state.galaxies, &state.galaxyNames);
     fillList(state.zonesList, state.zones, &state.zoneNames);
     clearList(state.objectsList);
@@ -502,6 +586,8 @@ void selectZone(EditorState& state) {
     if (state.game) {
         state.stage = smg::StageArchive::open(state.game->filesystem(), zone, state.game->gameType());
     }
+    state.filter.clear();
+    if (state.searchEdit != nullptr) setWindowText(state.searchEdit, "");
     refreshObjects(state);
     syncViewportSelection(state, std::nullopt);
     refreshViewport(state, true);
@@ -533,8 +619,11 @@ LRESULT CALLBACK editorProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         created->zonesList = CreateWindowW(L"LISTBOX", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
                                            264, 32, 240, 360, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdZones)), nullptr, nullptr);
         created->objectsLabel = CreateWindowW(L"STATIC", L"Objects", WS_CHILD | WS_VISIBLE, 516, 12, 360, 18, window, nullptr, nullptr, nullptr);
+        created->searchEdit = CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+                                            516, 32, 360, 24, window,
+                                            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdSearch)), nullptr, nullptr);
         created->objectsList = CreateWindowW(L"LISTBOX", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
-                                             516, 32, 360, 360, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdObjects)), nullptr, nullptr);
+                                             516, 60, 360, 332, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdObjects)), nullptr, nullptr);
 
         created->nameLabel = CreateWindowW(L"STATIC", L"Name", WS_CHILD | WS_VISIBLE, 12, 404, 50, 18, window, nullptr, nullptr, nullptr);
         created->nameEdit = CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER, 64, 400, 220, 24, window,
@@ -571,8 +660,8 @@ LRESULT CALLBACK editorProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         created->viewportReady =
             created->viewport.create(window, kIdViewport, GetModuleHandleW(nullptr));
         if (created->viewportReady) {
-            created->viewport.setOnSelect([created](std::optional<std::size_t> selected) {
-                syncViewportSelection(*created, selected);
+            created->viewport.setOnSelect([state = created](std::optional<std::size_t> selected) {
+                syncViewportSelection(*state, selected);
             });
             refreshViewport(*created, false);
         } else {
@@ -635,16 +724,44 @@ LRESULT CALLBACK editorProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                 break;
             case kIdObjects:
                 if (HIWORD(wParam) == LBN_SELCHANGE && !state->syncingSelection) {
-                    const auto selected = static_cast<int>(SendMessageW(state->objectsList, LB_GETCURSEL, 0, 0));
-                    showObject(*state, selected);
-                    if (selected >= 0) {
-                        syncViewportSelection(*state, static_cast<std::size_t>(selected));
+                    const auto listSel = static_cast<int>(SendMessageW(state->objectsList, LB_GETCURSEL, 0, 0));
+                    const int stageSel = listToStageIndex(*state, listSel);
+                    showObject(*state, stageSel);
+                    if (stageSel >= 0) {
+                        syncViewportSelection(*state, static_cast<std::size_t>(stageSel));
                     } else {
                         syncViewportSelection(*state, std::nullopt);
                     }
                 }
                 break;
+            case kIdSearch:
+                if (HIWORD(wParam) == EN_CHANGE) {
+                    state->filter = windowText(state->searchEdit);
+                    // Preserve viewport selection across filtering when possible.
+                    const std::optional<std::size_t> keepSel = state->viewportSelected;
+                    refreshObjects(*state);
+                    if (keepSel && state->stage && *keepSel < state->stage->objects().size()) {
+                        const int list = stageToListIndex(*state, *keepSel);
+                        if (list >= 0) SendMessageW(state->objectsList, LB_SETCURSEL, static_cast<WPARAM>(list), 0);
+                    }
+                    refreshViewport(*state, false);
+                }
+                break;
+            case kIdToggleDark:
+                state->settings.darkMode = !state->settings.darkMode;
+                state->settings.save();
+                applyTheme(*state);
+                setStatus(*state, state->settings.darkMode ? "Dark theme on." : "Light theme on.");
+                break;
             default:
+                if (LOWORD(wParam) >= kIdRecentBase && LOWORD(wParam) <= kIdRecentMax) {
+                    const std::size_t idx = static_cast<std::size_t>(LOWORD(wParam) - kIdRecentBase);
+                    if (idx < state->settings.recentMaps.size()) {
+                        const std::filesystem::path path(state->settings.recentMaps[idx]);
+                        if (std::filesystem::is_directory(path)) openGame(*state, path);
+                        else openMap(*state, path);
+                    }
+                }
                 break;
             }
         } catch (const std::exception& error) {
@@ -704,22 +821,38 @@ int runGui(const std::filesystem::path& executable, const std::filesystem::path&
 
     HMENU menu = CreateMenu();
     HMENU fileMenu = CreatePopupMenu();
-    AppendMenuW(fileMenu, MF_STRING, kIdOpenGame, L"Open Game Directory...");
-    AppendMenuW(fileMenu, MF_STRING, kIdOpenMap, L"Open Map Archive...");
-    AppendMenuW(fileMenu, MF_STRING, kIdSave, L"Save Zone");
+    AppendMenuW(fileMenu, MF_STRING, kIdOpenGame, L"Open Game Directory...\tCtrl+O");
+    AppendMenuW(fileMenu, MF_STRING, kIdOpenMap, L"Open Map Archive...\tCtrl+M");
+    AppendMenuW(fileMenu, MF_STRING, kIdSave, L"Save Zone\tCtrl+S");
     AppendMenuW(fileMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(fileMenu, MF_STRING, kIdExit, L"Exit");
     AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(fileMenu), L"File");
+    HMENU viewMenu = CreatePopupMenu();
+    AppendMenuW(viewMenu, MF_STRING, kIdToggleDark, L"Toggle Dark Theme");
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(viewMenu), L"View");
 
     HWND window = CreateWindowW(L"WhiteholeProEditor", L"Whitehole Pro", WS_OVERLAPPEDWINDOW,
                                 CW_USEDEFAULT, CW_USEDEFAULT, 980, 800, nullptr, menu, GetModuleHandleW(nullptr), nullptr);
     auto* state = reinterpret_cast<EditorState*>(GetWindowLongPtrW(window, GWLP_USERDATA));
     if (state != nullptr) {
+        state->window = window;
+        state->fileMenu = fileMenu;
+        state->settings.load();
         state->dataRoot = dataDirectory(executable);
         state->galaxyNames.loadJson(state->dataRoot / "galaxies.json");
         state->zoneNames.loadJson(state->dataRoot / "zones.json");
+        state->objectDb.load(state->dataRoot / "objectdb.json");
+        rebuildRecentMenu(*state);
+        applyTheme(*state);
+        if (!state->settings.lastGameDir.empty() && initialFile.empty() &&
+            std::filesystem::is_directory(state->settings.lastGameDir)) {
+            try {
+                openGame(*state, std::filesystem::path(state->settings.lastGameDir));
+            } catch (...) {
+            }
+        }
 
-        bool opened = false;
+        bool opened = state->game.has_value() || state->stage.has_value();
         if (!initialFile.empty() && std::filesystem::exists(initialFile)) {
             try {
                 if (std::filesystem::is_directory(initialFile)) {

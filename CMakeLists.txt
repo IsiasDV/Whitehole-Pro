@@ -48,7 +48,9 @@ function(whitehole_optimize target)
 endfunction()
 
 add_library(whitehole_core
+    cpp/src/app/settings.cpp
     cpp/src/db/name_table.cpp
+    cpp/src/db/object_db.cpp
     cpp/src/io/binary_file.cpp
     cpp/src/io/directory_filesystem.cpp
     cpp/src/io/rarc.cpp
@@ -62,6 +64,7 @@ add_library(whitehole_core
     cpp/src/smg/hash.cpp
     cpp/src/smg/bti.cpp
     cpp/src/smg/stage_archive.cpp
+    cpp/src/util/json.cpp
 )
 
 target_include_directories(whitehole_core PUBLIC cpp/include)

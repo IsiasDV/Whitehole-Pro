@@ -1,8 +1,12 @@
-﻿#include "whitehole/db/name_table.hpp"
+﻿#include "whitehole/app/settings.hpp"
+#include "whitehole/db/name_table.hpp"
+#include "whitehole/db/object_db.hpp"
 #include "whitehole/io/binary_file.hpp"
 #include "whitehole/io/directory_filesystem.hpp"
 #include "whitehole/io/rarc.hpp"
 #include "whitehole/io/yaz0.hpp"
+#include "whitehole/util/json.hpp"
+#include "whitehole/util/text.hpp"
 #include "whitehole/math/geometry.hpp"
 #include "whitehole/render/camera.hpp"
 #include "whitehole/render/viewport_scene.hpp"
@@ -16,6 +20,7 @@
 #include <cmath>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -625,6 +630,72 @@ void testBtiDecoding() {
 }
 
 
+void testJsonRoundTrip() {
+    using whitehole::util::JsonArray;
+    using whitehole::util::JsonObject;
+    using whitehole::util::JsonValue;
+    JsonObject root;
+    root["name"] = JsonValue("Kinopio");
+    root["count"] = JsonValue(3.0);
+    root["ok"] = JsonValue(true);
+    JsonArray items;
+    items.emplace_back("a");
+    items.emplace_back(1.0);
+    root["items"] = JsonValue(std::move(items));
+    const std::string text = whitehole::util::serializeJson(JsonValue(root));
+    const JsonValue parsed = whitehole::util::parseJson(text);
+    expect(parsed.strAt("name") == "Kinopio", "JSON string round trip failed");
+    expect(parsed.at("count").asNumber() == 3.0, "JSON number round trip failed");
+    expect(parsed.at("ok").asBool() == true, "JSON bool round trip failed");
+    expect(parsed.at("items").asArray().size() == 2, "JSON array round trip failed");
+    bool rejected = false;
+    try {
+        (void)whitehole::util::parseJson("{bad}");
+    } catch (const std::runtime_error&) {
+        rejected = true;
+    }
+    expect(rejected, "malformed JSON was not rejected");
+}
+
+void testSettingsRoundTrip() {
+    whitehole::app::Settings settings;
+    TemporaryDirectory temp;
+    settings.setConfigPath(temp.path / "settings.json");
+    settings.lastGameDir = "C:/games/smg2";
+    settings.darkMode = false;
+    settings.showPaths = false;
+    settings.pushRecentMap("C:/games/map.arc");
+    settings.pushRecentMap("C:/games/other.arc");
+    settings.pushRecentMap("C:/games/map.arc");
+    expect(settings.recentMaps.size() == 2, "recent maps should dedupe");
+    expect(settings.recentMaps.front() == "C:/games/map.arc", "recent maps order wrong");
+    settings.save();
+    whitehole::app::Settings loaded;
+    loaded.setConfigPath(temp.path / "settings.json");
+    loaded.load();
+    expect(loaded.lastGameDir == "C:/games/smg2", "settings lastGameDir mismatch");
+    expect(loaded.darkMode == false, "settings darkMode mismatch");
+    expect(loaded.showPaths == false, "settings showPaths mismatch");
+    expect(loaded.recentMaps.size() == 2, "settings recentMaps mismatch");
+}
+
+void testObjectDatabase() {
+    TemporaryDirectory temp;
+    const auto path = temp.path / "objectdb.json";
+    {
+        std::ofstream out(path, std::ios::binary);
+        out << "{\"Objects\":["
+               "{\"InternalName\":\"Kinopio\",\"SimpleName\":\"Toad\",\"Category\":\"NPC\"},"
+               "{\"InternalName\":\"Kuribo\",\"Category\":\"Enemy\"}]}";
+    }
+    whitehole::db::ObjectDatabase db;
+    db.load(path);
+    expect(db.size() == 2, "objectdb size wrong");
+    expect(db.contains("Kinopio"), "objectdb missing Kinopio");
+    expect(db.displayName("Kinopio") == "Toad", "objectdb display name wrong");
+    expect(db.displayName("Missing") == "\"Missing\"", "objectdb fallback wrong");
+}
+
 } // namespace
 
 int main() {
@@ -643,6 +714,9 @@ int main() {
         testNameTables();
         testStageAndGameModels();
         testBtiDecoding();
+        testJsonRoundTrip();
+        testSettingsRoundTrip();
+        testObjectDatabase();
         std::cout << "All Whitehole native core tests passed\n";
         return 0;
     } catch (const std::exception& error) {

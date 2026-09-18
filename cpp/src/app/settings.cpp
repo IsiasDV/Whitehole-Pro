@@ -1,0 +1,111 @@
+#include "whitehole/app/settings.hpp"
+
+#include <algorithm>
+#include <optional>
+#include "whitehole/util/json.hpp"
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
+namespace whitehole::app {
+namespace {
+std::string getS(const util::JsonValue& o, const char* k) { return o.at(k).asString(); }
+bool getB(const util::JsonValue& o, const char* k, bool fb) { return o.at(k).asBool(fb); }
+void putS(util::JsonObject& o, const char* k, const std::string& v) { o[k] = util::JsonValue(v); }
+void putB(util::JsonObject& o, const char* k, bool v) { o[k] = util::JsonValue(v); }
+} // namespace
+Settings& Settings::instance() {
+    static Settings s;
+    return s;
+}
+void Settings::setConfigPath(std::filesystem::path p) {
+    configPath_ = std::move(p);
+}
+std::filesystem::path Settings::defaultConfigPath() {
+#ifdef _WIN32
+    const char* local = std::getenv("LOCALAPPDATA");
+    if (local != nullptr && *local != '\0')
+        return std::filesystem::path(local) / "WhiteholePro" / "settings.json";
+    const char* profile = std::getenv("USERPROFILE");
+    if (profile != nullptr && *profile != '\0')
+        return std::filesystem::path(profile) / "WhiteholePro" / "settings.json";
+    return std::filesystem::path("WhiteholePro") / "settings.json";
+#else
+    const char* home = std::getenv("HOME");
+    if (home != nullptr && *home != '\0')
+        return std::filesystem::path(home) / ".config" / "whitehole-pro" / "settings.json";
+    return std::filesystem::path("settings.json");
+#endif
+}
+void Settings::load() {
+    if (configPath_.empty()) configPath_ = defaultConfigPath();
+    loaded_ = true;
+    std::ifstream in(configPath_, std::ios::binary);
+    if (!in) return;
+    std::ostringstream buf;
+    buf << in.rdbuf();
+    util::JsonValue root;
+    try { root = util::parseJson(buf.str()); } catch (...) { return; }
+    if (!root.isObject()) return;
+    lastGameDir = getS(root, "lastGameDir");
+    baseGameDir = getS(root, "baseGameDir");
+    darkMode = getB(root, "darkMode", true);
+    openMaximized = getB(root, "openMaximized", false);
+    showAxis = getB(root, "showAxis", true);
+    showAreas = getB(root, "showAreas", true);
+    showCameras = getB(root, "showCameras", true);
+    showGravity = getB(root, "showGravity", true);
+    showPaths = getB(root, "showPaths", true);
+    betterQuality = getB(root, "betterQuality", true);
+    lowPolyModels = getB(root, "lowPolyModels", false);
+    collisionModels = getB(root, "collisionModels", false);
+    reverseRotation = getB(root, "reverseRotation", false);
+    wasdMovement = getB(root, "wasdMovement", false);
+    recentMaps.clear();
+    for (const auto& item : root.at("recentMaps").asArray()) {
+        if (item.isString() && recentMaps.size() < 8) recentMaps.push_back(item.asString());
+    }
+}
+void Settings::save() const {
+    if (configPath_.empty()) return;
+    std::error_code ec;
+    if (configPath_.has_parent_path()) std::filesystem::create_directories(configPath_.parent_path(), ec);
+    util::JsonObject o;
+    putS(o, "lastGameDir", lastGameDir);
+    putS(o, "baseGameDir", baseGameDir);
+    putB(o, "darkMode", darkMode);
+    putB(o, "openMaximized", openMaximized);
+    putB(o, "showAxis", showAxis);
+    putB(o, "showAreas", showAreas);
+    putB(o, "showCameras", showCameras);
+    putB(o, "showGravity", showGravity);
+    putB(o, "showPaths", showPaths);
+    putB(o, "betterQuality", betterQuality);
+    putB(o, "lowPolyModels", lowPolyModels);
+    putB(o, "collisionModels", collisionModels);
+    putB(o, "reverseRotation", reverseRotation);
+    putB(o, "wasdMovement", wasdMovement);
+    util::JsonArray recent;
+    for (const auto& m : recentMaps) recent.emplace_back(m);
+    o["recentMaps"] = util::JsonValue(std::move(recent));
+    std::ofstream out(configPath_, std::ios::binary | std::ios::trunc);
+    if (out) out << util::serializeJson(util::JsonValue(std::move(o)));
+}
+void Settings::reset() {
+    lastGameDir.clear();
+    baseGameDir.clear();
+    recentMaps.clear();
+    darkMode = true;
+    openMaximized = false;
+    showAxis = showAreas = showCameras = showGravity = showPaths = true;
+    betterQuality = true;
+    lowPolyModels = collisionModels = false;
+    reverseRotation = wasdMovement = false;
+    loaded_ = true;
+}
+void Settings::pushRecentMap(const std::string& path) {
+    if (path.empty()) return;
+    recentMaps.erase(std::remove(recentMaps.begin(), recentMaps.end(), path), recentMaps.end());
+    recentMaps.insert(recentMaps.begin(), path);
+    if (recentMaps.size() > 8) recentMaps.resize(8);
+}
+} // namespace whitehole::app
