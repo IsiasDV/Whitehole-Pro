@@ -1,6 +1,6 @@
 // Windowed entry point for whitehole-pro.exe (no console window).
 //
-// The console-subsystem whitehole-neo.exe stays available for scripting and
+// The console-subsystem whitehole-pro-console.exe stays available for scripting and
 // tests; this target only exists so double-clicking the app never flashes a
 // console, and so "Open with..." can pass a map archive straight to the editor.
 

@@ -34,7 +34,7 @@ import whitehole.smg.GameArchive;
 import whitehole.util.Discord;
 
 public class Whitehole {
-    public static final String NAME = "Whitehole Neo";
+    public static final String NAME = "Whitehole Pro";
     public static final String WEB_URL = "https://discord.gg/k7ZKzSDsVq";
     public static Image ICON;
     public static Discord RPC;

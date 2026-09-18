@@ -30,20 +30,20 @@ void printUsage() {
         << "Whitehole Pro C++ 0.2.0\n"
         << "Native Super Mario Galaxy editor core\n\n"
         << "Usage:\n"
-        << "  whitehole-neo\n"
-        << "  whitehole-neo gui\n"
-        << "  whitehole-neo game list <game-directory>\n"
-        << "  whitehole-neo galaxy inspect <game-directory> <galaxy>\n"
-        << "  whitehole-neo zone objects <game-directory> <zone>\n"
-        << "  whitehole-neo map objects <archive.arc>\n"
-        << "  whitehole-neo archive list <archive.arc>\n"
-        << "  whitehole-neo archive extract <archive.arc> <directory>\n"
-        << "  whitehole-neo archive replace <archive.arc> <entry> <input> <output.arc>\n"
-        << "  whitehole-neo yaz0 compress <input> <output>\n"
-        << "  whitehole-neo yaz0 decompress <input> <output>\n"
-        << "  whitehole-neo bcsv inspect <table.bcsv> [--little]\n"
-        << "  whitehole-neo bcsv roundtrip <input.bcsv> <output.bcsv> [--little]\n"
-        << "  whitehole-neo hash <field-name>\n";
+        << "  whitehole-pro-console\n"
+        << "  whitehole-pro-console gui\n"
+        << "  whitehole-pro-console game list <game-directory>\n"
+        << "  whitehole-pro-console galaxy inspect <game-directory> <galaxy>\n"
+        << "  whitehole-pro-console zone objects <game-directory> <zone>\n"
+        << "  whitehole-pro-console map objects <archive.arc>\n"
+        << "  whitehole-pro-console archive list <archive.arc>\n"
+        << "  whitehole-pro-console archive extract <archive.arc> <directory>\n"
+        << "  whitehole-pro-console archive replace <archive.arc> <entry> <input> <output.arc>\n"
+        << "  whitehole-pro-console yaz0 compress <input> <output>\n"
+        << "  whitehole-pro-console yaz0 decompress <input> <output>\n"
+        << "  whitehole-pro-console bcsv inspect <table.bcsv> [--little]\n"
+        << "  whitehole-pro-console bcsv roundtrip <input.bcsv> <output.bcsv> [--little]\n"
+        << "  whitehole-pro-console hash <field-name>\n";
 }
 
 int archiveCommand(int argc, char** argv) {
@@ -266,7 +266,7 @@ int runCli(int argc, char** argv) {
         }
         throw std::runtime_error("Unknown command: " + command);
     } catch (const std::exception& error) {
-        std::cerr << "whitehole-neo: " << error.what() << '\n';
+        std::cerr << "whitehole-pro-console: " << error.what() << '\n';
         return 1;
     }
 }

@@ -35,7 +35,7 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
       - name: Smoke test the CLI
-        run: build/whitehole-neo.exe map objects data/templates/SMG2BigGalaxyMap.arc
+        run: build/whitehole-pro-console.exe map objects data/templates/SMG2BigGalaxyMap.arc
 
       - name: Upload executables
         uses: actions/upload-artifact@v4
@@ -44,4 +44,4 @@ jobs:
           if-no-files-found: error
           path: |
             build/whitehole-pro.exe
-            build/whitehole-neo.exe
+            build/whitehole-pro-console.exe

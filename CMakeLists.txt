@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(WhiteholeNeo VERSION 0.2.0 LANGUAGES CXX)
+project(WhiteholePro VERSION 0.2.0 LANGUAGES CXX)
 
 option(WHITEHOLE_BUILD_TESTS "Build the native core tests" ON)
 option(WHITEHOLE_BUILD_GUI "Build the windowed whitehole-pro application (Windows)" ON)
@@ -135,15 +135,15 @@ endfunction()
 # ---------------------------------------------------------------------------
 # Console executable: CLI, scripting, CI
 # ---------------------------------------------------------------------------
-add_executable(whitehole-neo cpp/src/main.cpp $<TARGET_OBJECTS:whitehole_app>)
-target_link_libraries(whitehole-neo PRIVATE whitehole_core whitehole_win32)
+add_executable(whitehole-pro-console cpp/src/main.cpp $<TARGET_OBJECTS:whitehole_app>)
+target_link_libraries(whitehole-pro-console PRIVATE whitehole_core whitehole_win32)
 if(MSVC)
-    target_compile_options(whitehole-neo PRIVATE /utf-8)
+    target_compile_options(whitehole-pro-console PRIVATE /utf-8)
 endif()
-whitehole_optimize(whitehole-neo)
-whitehole_copy_data(whitehole-neo)
+whitehole_optimize(whitehole-pro-console)
+whitehole_copy_data(whitehole-pro-console)
 if(WHITEHOLE_RES_FILES)
-    target_sources(whitehole-neo PRIVATE ${WHITEHOLE_RES_FILES})
+    target_sources(whitehole-pro-console PRIVATE ${WHITEHOLE_RES_FILES})
 endif()
 
 # ---------------------------------------------------------------------------
@@ -164,8 +164,8 @@ if(WHITEHOLE_HAVE_WIN32_GUI AND WHITEHOLE_BUILD_GUI)
     install(TARGETS whitehole-pro RUNTIME DESTINATION bin)
 endif()
 
-install(TARGETS whitehole-neo RUNTIME DESTINATION bin)
-install(DIRECTORY data DESTINATION share/whitehole-neo)
+install(TARGETS whitehole-pro-console RUNTIME DESTINATION bin)
+install(DIRECTORY data DESTINATION share/whitehole-pro)
 
 if(WHITEHOLE_BUILD_TESTS)
     enable_testing()

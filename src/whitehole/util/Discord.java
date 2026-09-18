@@ -69,7 +69,7 @@ public final class Discord {
         enabled = state != RPC_STATE.OFF.ordinal();
         detailed = state == RPC_STATE.DETAILED.ordinal();
         try {
-            // Currently uses Lord-G's Neo ID, please inform if any assets need change
+            // Currently uses the inherited Discord application ID; inform if any assets need change for Whitehole Pro
             client = new IPCClient(1418260169854423142L);
             builder = new Builder();
             builder.setLargeImage("icon");
@@ -101,7 +101,7 @@ public final class Discord {
     }
     
     /**
-     * Adds a new status associated with the frame for Whitehole Neo if the frame isn't already present.
+     * Adds a new status associated with the frame for Whitehole Pro if the frame isn't already present.
      * If it is present, it updates the existing frame's status with the new status.
      * @param frame The associated frame.
      * @param firstRow The first row in the status. It should be generic (ex. "Editing a Galaxy").

@@ -6,7 +6,7 @@ rem  What this does:
 rem    1. Checks you have CMake + a C++ compiler
 rem    2. Configures the project in .\build\
 rem    3. Builds whitehole-pro.exe (double-click editor, no console pop-up)
-rem       and whitehole-neo.exe (console + scripting tool)
+rem       and whitehole-pro-console.exe (console + scripting tool)
 rem    4. Runs the built-in tests to make sure everything works
 rem
 rem  You can also run:  Build.bat --clean   (deletes .\build\ and starts fresh)
@@ -122,7 +122,7 @@ set "CLI_EXE="
 for %%P in ("build\Release\whitehole-pro.exe" "build\whitehole-pro.exe" "build-msvc\Release\whitehole-pro.exe") do (
     if exist %%~P if "!GUI_EXE!"=="" set "GUI_EXE=%%~P"
 )
-for %%P in ("build\Release\whitehole-neo.exe" "build\whitehole-neo.exe" "build-msvc\Release\whitehole-neo.exe") do (
+for %%P in ("build\Release\whitehole-pro-console.exe" "build\whitehole-pro-console.exe" "build-msvc\Release\whitehole-pro-console.exe") do (
     if exist %%~P if "!CLI_EXE!"=="" set "CLI_EXE=%%~P"
 )
 

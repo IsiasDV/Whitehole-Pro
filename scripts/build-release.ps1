@@ -9,7 +9,7 @@
         powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Package
 
     Produces build\whitehole-pro.exe (windowed editor, static runtime, icon and
-    version metadata) plus build\whitehole-neo.exe (console/CLI). With -Package
+    version metadata) plus build\whitehole-pro-console.exe (console/CLI). With -Package
     a dist\WhiteholePro-<version>-win64.zip is written containing both
     executables, the runtime data folder and the documentation.
 
@@ -89,7 +89,7 @@ if (-not $SkipTests) {
     Invoke-Checked 'ctest' @('--test-dir', $buildPath, '-C', $Configuration, '--output-on-failure')
 }
 
-$consoleExe = Join-Path $buildPath 'whitehole-neo.exe'
+$consoleExe = Join-Path $buildPath 'whitehole-pro-console.exe'
 $guiExe = Join-Path $buildPath 'whitehole-pro.exe'
 if (-not (Test-Path $guiExe) -and -not (Test-Path $consoleExe)) {
     throw "No executable was produced in $buildPath"

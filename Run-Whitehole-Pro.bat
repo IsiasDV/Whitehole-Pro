@@ -15,7 +15,7 @@ set "CLI_EXE="
 for %%P in ("whitehole-pro.exe" "build\whitehole-pro.exe" "build\Release\whitehole-pro.exe" "build-msvc\Release\whitehole-pro.exe") do (
     if exist %%~P if "!GUI_EXE!"=="" set "GUI_EXE=%%~P"
 )
-for %%P in ("whitehole-neo.exe" "build\whitehole-neo.exe" "build\Release\whitehole-neo.exe" "build-msvc\Release\whitehole-neo.exe") do (
+for %%P in ("whitehole-pro-console.exe" "build\whitehole-pro-console.exe" "build\Release\whitehole-pro-console.exe" "build-msvc\Release\whitehole-pro-console.exe") do (
     if exist %%~P if "!CLI_EXE!"=="" set "CLI_EXE=%%~P"
 )
 

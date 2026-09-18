@@ -101,7 +101,7 @@ void testDirectoryFilesystem() {
 
 void testYaz0() {
     std::vector<std::uint8_t> input;
-    const std::string pattern = "Whitehole Neo native archive support! ";
+    const std::string pattern = "Whitehole Pro native archive support! ";
     for (int index = 0; index < 100; ++index) {
         input.insert(input.end(), pattern.begin(), pattern.end());
         input.push_back(static_cast<std::uint8_t>(index));

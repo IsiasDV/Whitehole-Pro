@@ -4,7 +4,7 @@ Whitehole is moving from its Java 11/Swing implementation to a native C++20 appl
 
 ## Current native milestone
 
-The repository builds `whitehole-neo` from `whitehole_core`. The native app currently owns:
+The repository builds `whitehole-pro` (windowed editor) and `whitehole-pro-console` (CLI) from `whitehole_core`. The native app currently owns:
 
 - bounds-checked endian-aware binary I/O;
 - path-safe project filesystem access;
@@ -31,7 +31,7 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-The editor is `build\Release\whitehole-neo.exe` (or `build\Debug\whitehole-neo.exe` for a Debug build). Launching it with no arguments opens the desktop editor.
+The editor is `build\Release\whitehole-pro.exe` (or `build\Debug\whitehole-pro.exe` for a Debug build). Launching it with no arguments opens the desktop editor. The console tool is `build\Release\whitehole-pro-console.exe`.
 
 ### Other generators
 
@@ -45,23 +45,23 @@ ctest --test-dir build --output-on-failure
 
 ```sh
 # Windows desktop editor
-build\Release\whitehole-neo.exe
-build\Release\whitehole-neo.exe gui
+build\Release\whitehole-pro.exe
+build\Release\whitehole-pro-console.exe gui
 
 # List objects inside a bundled template map
-whitehole-neo map objects data/templates/SMG2BigGalaxyMap.arc
+whitehole-pro-console map objects data/templates/SMG2BigGalaxyMap.arc
 
 # Open a real SMG1/SMG2 workspace (the folder that contains StageData)
-whitehole-neo game list path\to\extracted\files
-whitehole-neo galaxy inspect path\to\extracted\files HoneyBeeKingdomGalaxy
-whitehole-neo zone objects path\to\extracted\files HoneyBeeKingdomGalaxy
+whitehole-pro-console game list path\to\extracted\files
+whitehole-pro-console galaxy inspect path\to\extracted\files HoneyBeeKingdomGalaxy
+whitehole-pro-console zone objects path\to\extracted\files HoneyBeeKingdomGalaxy
 
 # Archive / BCSV / Yaz0 tools
-whitehole-neo archive list data/templates/SMG2BigGalaxyMap.arc
-whitehole-neo archive extract data/templates/SMG2BigGalaxyMap.arc extracted
-whitehole-neo bcsv inspect extracted/Stage/jmp/Placement/Common/ObjInfo
-whitehole-neo yaz0 decompress input.szs output.arc
-whitehole-neo hash Obj_arg0
+whitehole-pro-console archive list data/templates/SMG2BigGalaxyMap.arc
+whitehole-pro-console archive extract data/templates/SMG2BigGalaxyMap.arc extracted
+whitehole-pro-console bcsv inspect extracted/Stage/jmp/Placement/Common/ObjInfo
+whitehole-pro-console yaz0 decompress input.szs output.arc
+whitehole-pro-console hash Obj_arg0
 ```
 
 In the Windows editor: **File > Open Map Archive...** and choose `data/templates/SMG2BigGalaxyMap.arc` to load objects without a full game dump. Use **File > Open Game Directory...** for an extracted SMG workspace. Edit name/position/rotation/scale, click **Apply**, then **File > Save Zone**.

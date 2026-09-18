@@ -8,7 +8,7 @@
 
 Look at this image, look it makes us look so techy and advanced:
 
-![Editing Flipswitch and Flip-Swap Galaxy](https://github.com/SMGCommunity/Whitehole-Neo/blob/master/ExampleImage.png)
+![Editing Flipswitch and Flip-Swap Galaxy](https://github.com/SMGCommunity/Whitehole-Neo/blob/master/ExampleImage.jpg)
 
 Whitehole Pro is a friendly editor for Super Mario Galaxy 1 & 2 level files.
 It opens `.arc` map files and extracted game folders, lets you browse objects,
@@ -40,7 +40,7 @@ one-line fix (see [Prerequisites](#-prerequisites--what-you-need-first) below).
 **Where are my apps after building?**
 
 - `build\Release\whitehole-pro.exe` — the **editor** (double-click this, no console pop-up)
-- `build\Release\whitehole-neo.exe` — the **console/CLI tool** (for commands & scripts)
+- `build\Release\whitehole-pro-console.exe` — the **console/CLI tool** (for commands & scripts)
 - (If you use Visual Studio, they may be in `build-msvc\Release\` instead — `Build.bat` tells you.)
 
 ### First 60 seconds in the editor
@@ -173,27 +173,27 @@ file also works. The old `Whitehole.bat` still works — it forwards here.
 ### The console tool (scripting, quick checks, CI)
 
 ```bat
-build\Release\whitehole-neo.exe --help
-build\Release\whitehole-neo.exe gui
+build\Release\whitehole-pro-console.exe --help
+build\Release\whitehole-pro-console.exe gui
 ```
 
 Handy commands (run from the repo root so `data\` resolves):
 
 ```bat
 :: List objects in the bundled template map (no game dump needed)
-build\Release\whitehole-neo.exe map objects data\templates\SMG2BigGalaxyMap.arc
+build\Release\whitehole-pro-console.exe map objects data\templates\SMG2BigGalaxyMap.arc
 
 :: Real extracted SMG1/SMG2 folder (the one containing StageData)
-build\Release\whitehole-neo.exe game list C:\path\to\extracted\files
-build\Release\whitehole-neo.exe galaxy inspect C:\path\to\extracted\files HoneyBeeKingdomGalaxy
-build\Release\whitehole-neo.exe zone objects C:\path\to\extracted\files HoneyBeeKingdomGalaxy
+build\Release\whitehole-pro-console.exe game list C:\path\to\extracted\files
+build\Release\whitehole-pro-console.exe galaxy inspect C:\path\to\extracted\files HoneyBeeKingdomGalaxy
+build\Release\whitehole-pro-console.exe zone objects C:\path\to\extracted\files HoneyBeeKingdomGalaxy
 
 :: Archive / table / compression tools
-build\Release\whitehole-neo.exe archive list data\templates\SMG2BigGalaxyMap.arc
-build\Release\whitehole-neo.exe archive extract data\templates\SMG2BigGalaxyMap.arc extracted
-build\Release\whitehole-neo.exe bcsv inspect extracted\Stage\jmp\Placement\Common\ObjInfo
-build\Release\whitehole-neo.exe yaz0 decompress input.szs output.arc
-build\Release\whitehole-neo.exe hash Obj_arg0
+build\Release\whitehole-pro-console.exe archive list data\templates\SMG2BigGalaxyMap.arc
+build\Release\whitehole-pro-console.exe archive extract data\templates\SMG2BigGalaxyMap.arc extracted
+build\Release\whitehole-pro-console.exe bcsv inspect extracted\Stage\jmp\Placement\Common\ObjInfo
+build\Release\whitehole-pro-console.exe yaz0 decompress input.szs output.arc
+build\Release\whitehole-pro-console.exe hash Obj_arg0
 ```
 
 Full CLI reference + migration plan: [`docs/CPP_REWRITE.md`](docs/CPP_REWRITE.md).
@@ -210,7 +210,7 @@ Full CLI reference + migration plan: [`docs/CPP_REWRITE.md`](docs/CPP_REWRITE.md
 | Configure keeps failing | `Build.bat --clean`, then `Build.bat` again. |
 | MSYS2 user failing in `cmd.exe` | Use the **UCRT64** terminal instead, with the Ninja commands above. |
 | Tests fail but a `.exe` exists | App may still run. Copy the red text into an issue + your `cmake --version` and compiler (`cl` vs `g++ --version`). |
-| `whitehole-neo.exe` flashes and closes | That's the console tool — run it **from a terminal** to see output, or use `whitehole-pro.exe` for the windowed editor. |
+| `whitehole-pro-console.exe` flashes and closes | That's the console tool — run it **from a terminal** to see output, or use `whitehole-pro.exe` for the windowed editor. |
 | Editor is empty / says "Drag a map archive…" | Normal! **File → Open Map Archive…** → `data\templates\SMG2BigGalaxyMap.arc` for an instant demo. |
 
 Still stuck? Open an issue with: Windows version, `cmake --version`,
@@ -246,6 +246,10 @@ CMakePresets.json        <- windows-release / lto / debug / msvc-release presets
 
 - Something cool (and lots of it — overhauled UI, optimized native code,
   in-app tutorials, and every great Whitehole Neo feature, but friendlier).
+
+## Conclusion!
+
+Whitehole Neo is great but aging; Starforge could be the future but still in deep development. Whitehole Pro is the fast, zero-install C++ tool you can use right now to build maps today. And don't worry about switching to Supernova or Starforge! We'll make sure to closely monitor what features and updates they'll be implementing, so we'll have a better equivalent ready for you.
 
 ---
 
