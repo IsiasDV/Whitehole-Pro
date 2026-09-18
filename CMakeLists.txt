@@ -148,6 +148,9 @@ whitehole_copy_data(whitehole-pro-console)
 if(WHITEHOLE_RES_FILES)
     target_sources(whitehole-pro-console PRIVATE ${WHITEHOLE_RES_FILES})
 endif()
+if(MSVC AND WHITEHOLE_RES_FILES)
+    set_target_properties(whitehole-pro-console PROPERTIES LINK_FLAGS "/MANIFEST:NO")
+endif()
 
 # ---------------------------------------------------------------------------
 # Windowed executable: double-click friendly, no console flash
@@ -162,8 +165,11 @@ if(WHITEHOLE_HAVE_WIN32_GUI AND WHITEHOLE_BUILD_GUI)
     whitehole_optimize(whitehole-pro)
     whitehole_copy_data(whitehole-pro)
     if(WHITEHOLE_RES_FILES)
-        target_sources(whitehole-pro PRIVATE ${WHITEHOLE_RES_FILES})
-    endif()
+    target_sources(whitehole-pro PRIVATE ${WHITEHOLE_RES_FILES})
+endif()
+if(MSVC AND WHITEHOLE_RES_FILES)
+    set_target_properties(whitehole-pro PROPERTIES LINK_FLAGS "/MANIFEST:NO")
+endif()
     install(TARGETS whitehole-pro RUNTIME DESTINATION bin)
 endif()
 
