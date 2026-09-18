@@ -6,8 +6,6 @@
 > every tool we've got (including Claude) to move faster and make SMG
 > modding easier for everyone.
 
-Look at this image, look it makes us look so techy and advanced:
-
 ![Editing Flipswitch and Flip-Swap Galaxy](https://github.com/IsiasDV/Whitehole-Pro/blob/master/ExampleImage.jpg)
 
 Whitehole Pro is a friendly editor for Super Mario Galaxy 1 & 2 level files.
