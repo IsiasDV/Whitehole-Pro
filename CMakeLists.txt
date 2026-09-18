@@ -53,6 +53,8 @@ add_library(whitehole_core
     cpp/src/io/directory_filesystem.cpp
     cpp/src/io/rarc.cpp
     cpp/src/io/yaz0.cpp
+    cpp/src/render/camera.cpp
+    cpp/src/render/viewport_scene.cpp
     cpp/src/smg/bcsv.cpp
     cpp/src/smg/field_hashes.cpp
     cpp/src/smg/galaxy_archive.cpp
@@ -87,13 +89,13 @@ endif()
 add_library(whitehole_win32 INTERFACE)
 if(WHITEHOLE_HAVE_WIN32_GUI)
     target_compile_definitions(whitehole_win32 INTERFACE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-    target_link_libraries(whitehole_win32 INTERFACE comctl32 ole32 uuid shell32 comdlg32)
+    target_link_libraries(whitehole_win32 INTERFACE comctl32 ole32 uuid shell32 comdlg32 opengl32 gdi32)
 endif()
 
 # ---------------------------------------------------------------------------
 # Application objects shared by both executables (compiled only once)
 # ---------------------------------------------------------------------------
-set(WHITEHOLE_GUI_SOURCE cpp/src/app/gui_win32.cpp)
+set(WHITEHOLE_GUI_SOURCE cpp/src/app/gui_win32.cpp cpp/src/render/viewport_win32.cpp)
 if(NOT WHITEHOLE_HAVE_WIN32_GUI)
     set(WHITEHOLE_GUI_SOURCE cpp/src/app/gui_stub.cpp)
 endif()

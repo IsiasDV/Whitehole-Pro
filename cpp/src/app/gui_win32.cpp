@@ -14,6 +14,8 @@
 #include "whitehole/app/application.hpp"
 
 #include "whitehole/db/name_table.hpp"
+#include "whitehole/render/viewport_scene.hpp"
+#include "whitehole/render/viewport_win32.hpp"
 #include "whitehole/smg/game_archive.hpp"
 #include "whitehole/smg/stage_archive.hpp"
 
@@ -58,6 +60,7 @@ constexpr int kIdScaleY = 1112;
 constexpr int kIdScaleZ = 1113;
 constexpr int kIdApply = 1120;
 constexpr int kIdStatus = 1121;
+constexpr int kIdViewport = 1122;
 
 std::wstring utf8ToWide(std::string_view text) {
     if (text.empty()) {
@@ -134,10 +137,16 @@ struct EditorState {
     HWND rotationLabel{nullptr};
     HWND scaleLabel{nullptr};
     HWND status{nullptr};
+    HWND hintLabel{nullptr};
+    render::ViewportWindow viewport;
+    render::ViewportScene viewportScene;
+    std::optional<std::size_t> viewportSelected;
+    bool viewportReady{false};
+    bool syncingSelection{false};
 };
 
 // Keeps every control anchored while the window is resized: three list columns
-// stretch to fill the workspace above the fixed transform rows.
+// on top, the 3D viewport in the middle, fixed transform rows at the bottom.
 void layoutEditor(EditorState& state, HWND window) {
     RECT client{};
     GetClientRect(window, &client);
@@ -153,7 +162,11 @@ void layoutEditor(EditorState& state, HWND window) {
     const auto editorTop = statusTop - rowGap - rowHeight - (3 * rowGap);
     const auto columnWidth = std::max(150, (width - margin * 4) / 3);
     const auto listTop = margin + 20;
-    const auto listHeight = std::max(80, editorTop - margin - 8 - listTop);
+    // Reserve the middle band for the 3D viewport; lists keep a usable height
+    // while the viewport takes whatever vertical space is left.
+    constexpr int listHeight = 148;
+    const auto viewportTop = listTop + listHeight + 8;
+    const auto viewportHeight = std::max(140, editorTop - 26 - viewportTop);
 
     const auto secondX = margin * 2 + columnWidth;
     const auto thirdX = margin * 3 + columnWidth * 2;
@@ -184,6 +197,10 @@ void layoutEditor(EditorState& state, HWND window) {
     }
     MoveWindow(state.applyButton, 640, editorTop + rowGap, 90, 28, TRUE);
     MoveWindow(state.status, margin, statusTop, width - margin * 2, statusHeight, TRUE);
+    MoveWindow(state.hintLabel, margin, viewportTop - 2, width - margin * 2, 18, TRUE);
+    if (state.viewport.handle() != nullptr) {
+        MoveWindow(state.viewport.handle(), margin, viewportTop + 18, width - margin * 2, viewportHeight, TRUE);
+    }
 }
 
 std::optional<std::filesystem::path> pickFolder(HWND owner) {
@@ -252,6 +269,35 @@ void refreshObjects(EditorState& state) {
     }
 }
 
+void showObject(EditorState& state, int index);
+void syncViewportSelection(EditorState& state, std::optional<std::size_t> selected);
+
+void refreshViewport(EditorState& state, bool frame) {
+    if (!state.viewportReady) {
+        return;
+    }
+    if (state.stage) {
+        state.viewportScene.rebuild(state.stage->objects());
+    } else {
+        state.viewportScene.clear();
+    }
+    state.viewport.setScene(state.viewportScene);
+    if (!state.stage || state.stage->objects().empty()) {
+        state.viewportSelected.reset();
+        state.viewport.setSelected(std::nullopt);
+        return;
+    }
+    if (state.viewportSelected.has_value() && *state.viewportSelected >= state.stage->objects().size()) {
+        state.viewportSelected.reset();
+    }
+    state.viewport.setSelected(state.viewportSelected);
+    if (frame) {
+        state.viewport.frameAll();
+    } else {
+        state.viewport.invalidate();
+    }
+}
+
 void showObject(EditorState& state, int index) {
     if (!state.stage || index < 0 || static_cast<std::size_t>(index) >= state.stage->objects().size()) {
         return;
@@ -288,6 +334,27 @@ void applyObject(EditorState& state) {
     setStatus(state, "Updated " + object.name + " in memory. Save the zone to write the archive.");
     refreshObjects(state);
     SendMessageW(state.objectsList, LB_SETCURSEL, static_cast<WPARAM>(index), 0);
+    state.viewportSelected = static_cast<std::size_t>(index);
+    if (state.viewportReady) {
+        state.viewport.setSelected(state.viewportSelected);
+    }
+    refreshViewport(state, false);
+}
+
+void syncViewportSelection(EditorState& state, std::optional<std::size_t> selected) {
+    state.viewportSelected = selected;
+    if (state.viewportReady) {
+        state.viewport.setSelected(selected);
+    }
+    if (state.syncingSelection) {
+        return;
+    }
+    if (selected.has_value() && state.stage && *selected < state.stage->objects().size()) {
+        state.syncingSelection = true;
+        SendMessageW(state.objectsList, LB_SETCURSEL, static_cast<WPARAM>(*selected), 0);
+        showObject(state, static_cast<int>(*selected));
+        state.syncingSelection = false;
+    }
 }
 
 void openMap(EditorState& state, const std::filesystem::path& path) {
@@ -295,6 +362,8 @@ void openMap(EditorState& state, const std::filesystem::path& path) {
     state.zones = {state.stage->stageName()};
     fillList(state.zonesList, state.zones, nullptr);
     refreshObjects(state);
+    syncViewportSelection(state, std::nullopt);
+    refreshViewport(state, true);
     setStatus(state, "Opened map archive with " + std::to_string(state.stage->objects().size()) + " objects.");
 }
 
@@ -310,6 +379,8 @@ void openGame(EditorState& state, const std::filesystem::path& path) {
     fillList(state.galaxiesList, state.galaxies, &state.galaxyNames);
     fillList(state.zonesList, state.zones, &state.zoneNames);
     clearList(state.objectsList);
+    syncViewportSelection(state, std::nullopt);
+    refreshViewport(state, false);
     setStatus(state, "Opened SMG" + std::to_string(state.game->gameType()) + " workspace with "
                          + std::to_string(state.galaxies.size()) + " galaxies.");
 }
@@ -335,6 +406,8 @@ void selectZone(EditorState& state) {
         state.stage = smg::StageArchive::open(state.game->filesystem(), zone, state.game->gameType());
     }
     refreshObjects(state);
+    syncViewportSelection(state, std::nullopt);
+    refreshViewport(state, true);
     if (state.stage) {
         setStatus(state, "Loaded " + zone + " (" + std::to_string(state.stage->objects().size()) + " objects).");
     }
@@ -392,9 +465,22 @@ LRESULT CALLBACK editorProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                                         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdScaleZ)), nullptr, nullptr);
         created->applyButton = CreateWindowW(L"BUTTON", L"Apply", WS_CHILD | WS_VISIBLE, 640, 400, 90, 28, window,
                       reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdApply)), nullptr, nullptr);
+        created->hintLabel =
+            CreateWindowW(L"STATIC", L"3D view: left-drag pans, right-drag orbits, wheel zooms, click selects, Space frames.",
+                          WS_CHILD | WS_VISIBLE, 12, 200, 860, 18, window, nullptr, nullptr, nullptr);
         created->status = CreateWindowW(L"STATIC", L"Open a game folder or a map archive to begin.",
                                         WS_CHILD | WS_VISIBLE, 12, 504, 860, 22, window,
                                         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdStatus)), nullptr, nullptr);
+        created->viewportReady =
+            created->viewport.create(window, kIdViewport, GetModuleHandleW(nullptr));
+        if (created->viewportReady) {
+            created->viewport.setOnSelect([created](std::optional<std::size_t> selected) {
+                syncViewportSelection(*created, selected);
+            });
+            refreshViewport(*created, false);
+        } else {
+            setStatus(*created, "3D viewport unavailable (OpenGL init failed); list editing still works.");
+        }
         DragAcceptFiles(window, TRUE);
         layoutEditor(*created, window);
         return 0;
@@ -407,7 +493,7 @@ LRESULT CALLBACK editorProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     case WM_GETMINMAXINFO: {
         auto* limits = reinterpret_cast<MINMAXINFO*>(lParam);
         limits->ptMinTrackSize.x = 780;
-        limits->ptMinTrackSize.y = 560;
+        limits->ptMinTrackSize.y = 720;
         return 0;
     }
     case WM_COMMAND:
@@ -450,8 +536,14 @@ LRESULT CALLBACK editorProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                 }
                 break;
             case kIdObjects:
-                if (HIWORD(wParam) == LBN_SELCHANGE) {
-                    showObject(*state, static_cast<int>(SendMessageW(state->objectsList, LB_GETCURSEL, 0, 0)));
+                if (HIWORD(wParam) == LBN_SELCHANGE && !state->syncingSelection) {
+                    const auto selected = static_cast<int>(SendMessageW(state->objectsList, LB_GETCURSEL, 0, 0));
+                    showObject(*state, selected);
+                    if (selected >= 0) {
+                        syncViewportSelection(*state, static_cast<std::size_t>(selected));
+                    } else {
+                        syncViewportSelection(*state, std::nullopt);
+                    }
                 }
                 break;
             default:
@@ -484,7 +576,11 @@ LRESULT CALLBACK editorProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         return 0;
     }
     case WM_DESTROY:
-        delete state;
+        if (state != nullptr) {
+            state->viewport.destroy();
+            delete state;
+            SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+        }
         PostQuitMessage(0);
         return 0;
     default:
@@ -518,7 +614,7 @@ int runGui(const std::filesystem::path& executable, const std::filesystem::path&
     AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(fileMenu), L"File");
 
     HWND window = CreateWindowW(L"WhiteholeProEditor", L"Whitehole Pro", WS_OVERLAPPEDWINDOW,
-                                CW_USEDEFAULT, CW_USEDEFAULT, 920, 590, nullptr, menu, GetModuleHandleW(nullptr), nullptr);
+                                CW_USEDEFAULT, CW_USEDEFAULT, 980, 800, nullptr, menu, GetModuleHandleW(nullptr), nullptr);
     auto* state = reinterpret_cast<EditorState*>(GetWindowLongPtrW(window, GWLP_USERDATA));
     if (state != nullptr) {
         state->dataRoot = dataDirectory(executable);

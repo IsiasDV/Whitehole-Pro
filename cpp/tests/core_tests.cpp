@@ -4,6 +4,8 @@
 #include "whitehole/io/rarc.hpp"
 #include "whitehole/io/yaz0.hpp"
 #include "whitehole/math/geometry.hpp"
+#include "whitehole/render/camera.hpp"
+#include "whitehole/render/viewport_scene.hpp"
 #include "whitehole/smg/bcsv.hpp"
 #include "whitehole/smg/game_archive.hpp"
 #include "whitehole/smg/hash.hpp"
@@ -226,6 +228,66 @@ void testMath() {
     expect(std::abs(cross.z - 1) < 0.00001F, "vector cross product failed");
 }
 
+void testViewportCamera() {
+    whitehole::render::ViewportCamera camera;
+    camera.target = {100.0F, 0.0F, 0.0F};
+    camera.yawRadians = 0.0F;
+    camera.pitchRadians = 0.0F;
+    camera.distance = 500.0F;
+
+    const auto eye = camera.eye();
+    expect(std::abs(eye.x - 600.0F) < 0.01F, "viewport camera eye is wrong");
+
+    // Center of the screen must ray-cast straight at the orbit target.
+    const auto ray = camera.screenToRay(400.0F, 300.0F, 800.0F, 600.0F);
+    const auto toTarget = whitehole::math::Vec3f{100.0F - ray.origin.x, 0.0F - ray.origin.y, 0.0F - ray.origin.z};
+    const float alignment = whitehole::math::Vec3f::dot(ray.direction, toTarget.normalized());
+    expect(alignment > 0.999F, "viewport camera center ray misses target");
+
+    // Round trip through world->screen keeps the target centered.
+    float screenX = 0.0F;
+    float screenY = 0.0F;
+    expect(camera.worldToScreen(camera.target, 800.0F, 600.0F, screenX, screenY), "target behind viewport camera");
+    expect(std::abs(screenX - 400.0F) < 1.0F && std::abs(screenY - 300.0F) < 1.0F,
+           "viewport camera projection is off-center");
+
+    const float before = camera.distance;
+    camera.dolly(1.0F);
+    expect(camera.distance < before, "viewport camera dolly-in failed");
+    camera.frameTarget({1.0F, 2.0F, 3.0F}, 250.0F);
+    expect(std::abs(camera.target.x - 1.0F) < 0.001F && std::abs(camera.distance - 250.0F) < 0.001F,
+           "viewport camera framing failed");
+}
+
+void testViewportScene() {
+    whitehole::smg::PlacementObject object;
+    object.name = "Kinopio";
+    object.kind = "obj";
+    object.position = {100.0F, 0.0F, 0.0F};
+    object.rotation = {0.0F, 0.0F, 0.0F};
+    object.scale = {1.0F, 1.0F, 1.0F};
+
+    whitehole::render::ViewportScene scene;
+    scene.rebuild({object});
+    expect(scene.boxes().size() == 1, "viewport scene dropped the object");
+    const auto& box = scene.boxes().front();
+    expect(std::abs(box.center.x - 100.0F) < 0.001F, "viewport box center is wrong");
+
+    // Box matrix must map the unit-box corner onto position + half extent.
+    const auto corner = box.world.transformPoint({1.0F, 1.0F, 1.0F});
+    expect(std::abs(corner.x - 125.0F) < 0.01F, "viewport box world matrix is wrong");
+
+    whitehole::render::ViewportCamera camera;
+    camera.target = object.position;
+    camera.yawRadians = 0.0F;
+    camera.pitchRadians = 0.0F;
+    camera.distance = 500.0F;
+    const auto hit = scene.pick(camera, 400.0F, 300.0F, 800.0F, 600.0F);
+    expect(hit.has_value() && *hit == 0, "viewport picking missed the centered object");
+    // Far corner of the screen should miss the single centered box.
+    expect(!scene.pick(camera, 799.0F, 599.0F, 800.0F, 600.0F).has_value(), "viewport picking hit empty space");
+}
+
 void testHashes() {
     expect(whitehole::smg::jmapHash("name") == 0x00337A8B, "JMap hash does not match the game algorithm");
     expect(whitehole::smg::superFastHash("") == 0, "empty SuperFastHash changed");
@@ -432,6 +494,8 @@ int main() {
         testDirectoryFilesystem();
         testYaz0();
         testMath();
+        testViewportCamera();
+        testViewportScene();
         testHashes();
         testBcsvEndianness();
         testRarcEndianness();
