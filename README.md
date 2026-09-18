@@ -1,4 +1,12 @@
-# Whitehole Pro — Super Mario Galaxy Level Editor (native C++, no Java needed)
+# Whitehole Pro
+## The latest and greatest cutting-edge Whitehole
+### (and we can do this 'cause Whitehole Neo is open-source hahaha)
+
+> Yes, AI is used in this project. So what? No apologies here — we use
+> every tool we've got (including Claude) to move faster and make SMG
+> modding easier for everyone.
+
+Look at this image, look it makes us look so techy and advanced:
 
 ![Editing Flipswitch and Flip-Swap Galaxy](https://github.com/SMGCommunity/Whitehole-Neo/blob/master/ExampleImage.png)
 
@@ -7,9 +15,13 @@ It opens `.arc` map files and extracted game folders, lets you browse objects,
 tweak positions/rotations/scales, and save them back — with a point-and-click
 Windows editor **plus** a command-line tool for power users and scripts.
 
-> Built on [Whitehole Neo](https://github.com/SMGCommunity/Whitehole-Neo) (open source),
-> rewritten in modern C++20 for speed and for a true double-click `.exe` with **zero installs**
-> beyond a compiler. No Java. No weird setup.
+> Beyond Whitehole Neo: Whitehole Neo is cool and all that, right? And since
+> it's open source, we're taking everything great about it and making it
+> BETTER with Claude — an overhauled interface, optimized code, and extreme
+> user-friendliness. Tutorials inside the app are on the roadmap too.
+>
+> Built on [Whitehole Neo](https://github.com/SMGCommunity/Whitehole-Neo),
+> rewritten in modern C++20 for speed and for a true double-click `.exe`.
 
 ---
 
@@ -88,7 +100,8 @@ Then in the **UCRT64** terminal:
 pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-make
 ```
 
-**You do NOT need:** Java, Python, Node, or anything else.
+**You do NOT need:** Java (old technology, anyways 😄), Python, Node, or
+anything else. No weird preinstalls — this installs and works out of the box, baby!
 
 ---
 
@@ -221,6 +234,18 @@ CMakePresets.json        <- windows-release / lto / debug / msvc-release presets
 
 > **Contributors:** new code belongs under `cpp/`. The `src/` Java tree is the
 > frozen behavioral reference — see [`docs/CPP_REWRITE.md`](docs/CPP_REWRITE.md).
+
+> **We're competent.** Yeah, the tone on this page is a little ironic — we know!
+> But seriously: this project is all about lowering the learning curve so SMG
+> modding is for *anyone*. Great tutorials, a friendly UI, and docs a total
+> beginner can follow — that's the goal.
+
+---
+
+## 🗺️ Roadmap — what we plan to include
+
+- Something cool (and lots of it — overhauled UI, optimized native code,
+  in-app tutorials, and every great Whitehole Neo feature, but friendlier).
 
 ---
 
