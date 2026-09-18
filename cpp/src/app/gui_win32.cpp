@@ -24,10 +24,13 @@
 #include <commdlg.h>
 #include <shellapi.h>
 #include <shobjidl.h>
+#include <shlobj.h>   // SHGetKnownFolderPath
+#include <objbase.h>  // CoTaskMemFree
 
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <fstream>     // first-boot marker file
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -105,6 +108,100 @@ std::string formatFloat(float value) {
     std::array<char, 32> buffer{};
     const auto converted = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
     return std::string(buffer.data(), converted.ptr);
+}
+
+// First-launch state is kept in a per-user LocalAppData folder so it survives
+// reinstalling or relocating the editor, and never touches the read-only data/
+// bundle that ships beside the executable.
+std::filesystem::path firstBootConfigDir() {
+    PWSTR path = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &path))) {
+        return std::filesystem::path{};
+    }
+    std::filesystem::path result(path);
+    CoTaskMemFree(path);
+    return result / "WhiteholePro";
+}
+
+bool hasSeenFirstBoot() {
+    std::error_code ec;
+    return std::filesystem::exists(firstBootConfigDir() / "firstboot_done.marker", ec);
+}
+
+void markFirstBootSeen() {
+    const auto dir = firstBootConfigDir();
+    if (dir.empty()) {
+        return;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    // Best-effort: if the config dir can't be created, the splash simply
+    // returns next launch instead of silently swallowing the note.
+    std::ofstream(firstBootConfigDir() / "firstboot_done.marker", std::ios::trunc);
+}
+
+// One-time hello on first boot. TaskDialog gives a native, themeable popup;
+// MessageBoxW is the fallback on platforms that can't resolve it. The popup
+// always writes the marker on dismissal, so it genuinely only shows once.
+void showFirstBootSplash(HWND owner) {
+    const std::wstring content =
+        L"hello i know you don't know who i am but here's a WIP rewrite of your "
+        L"whole program in another language sponsored by every coding agent ever "
+        L"please accept";
+    const std::wstring footer =
+        L"This message will only be shown one time, on first launch.";
+
+    TASKDIALOGCONFIG config{};
+    config.cbSize = sizeof(config);
+    config.hwndParent = owner;
+        config.dwFlags = TDF_SIZE_TO_CONTENT;
+    config.pszWindowTitle = L"Whitehole Pro";
+    config.pszContent = content.c_str();
+    config.pszFooter = footer.c_str();
+    config.pszVerificationText = L"Don't show again";
+
+    TASKDIALOG_BUTTON acceptButton{100, L"Accept"};
+    config.pButtons = &acceptButton;
+    config.cButtons = 1;
+    config.nDefaultButton = 100;
+
+    if (HMODULE comctl = GetModuleHandleW(L"comctl32.dll")) {
+        using TaskDialogIndirectWFn =
+            HRESULT (WINAPI *)(const TASKDIALOGCONFIG *, int *, int *, BOOL *);
+        const auto taskDialogIndirect = reinterpret_cast<TaskDialogIndirectWFn>(
+            GetProcAddress(comctl, "TaskDialogIndirectW"));
+        if (taskDialogIndirect != nullptr) {
+            int button = 0;
+            BOOL verified = FALSE;
+            taskDialogIndirect(&config, &button, nullptr, &verified);
+            markFirstBootSeen();
+            return;
+        }
+    }
+    MessageBoxW(owner, content.c_str(), L"Whitehole Pro", MB_ICONINFORMATION | MB_OK);
+    markFirstBootSeen();
+}
+
+// A small, modern face-lift for the raw-Win32 chrome: a single Segoe UI 9pt
+// font applied to the window and every child control. The manifest already
+// enables Common Controls v6, so the themed standard controls plus this font
+// are the only visible change — no new libraries required. The font handle is
+// intentionally not freed (created once per window, for the life of the app).
+void applyModernTheme(HWND window) {
+    LOGFONTW logFont{};
+    HDC device = GetDC(window);
+    logFont.lfHeight = -MulDiv(9, GetDeviceCaps(device, LOGPIXELSX), 72);
+    ReleaseDC(window, device);
+        logFont.lfWeight = FW_SEMIBOLD;
+    logFont.lfQuality = CLEARTYPE_QUALITY;
+    logFont.lfPitchAndFamily = DEFAULT_PITCH | FF_DONTCARE;
+    lstrcpynW(logFont.lfFaceName, L"Segoe UI", LF_FACESIZE);
+    HFONT font = CreateFontIndirectW(&logFont);
+    SendMessageW(window, WM_SETFONT, reinterpret_cast<WPARAM>(font), 0);
+    EnumChildWindows(window, [](HWND child, LPARAM parameter) -> BOOL {
+        SendMessageW(child, WM_SETFONT, parameter, TRUE);
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(font));
 }
 
 struct EditorState {
@@ -481,8 +578,9 @@ LRESULT CALLBACK editorProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         } else {
             setStatus(*created, "3D viewport unavailable (OpenGL init failed); list editing still works.");
         }
-        DragAcceptFiles(window, TRUE);
+                DragAcceptFiles(window, TRUE);
         layoutEditor(*created, window);
+        applyModernTheme(window);
         return 0;
     }
     case WM_SIZE:
@@ -638,8 +736,14 @@ int runGui(const std::filesystem::path& executable, const std::filesystem::path&
             setStatus(*state, "Drag a map archive onto the window, or use File > Open Game Directory.");
         }
     }
-    ShowWindow(window, SW_SHOW);
+        ShowWindow(window, SW_SHOW);
     UpdateWindow(window);
+
+    // One-time first-launch splash: appears only the very first time the app
+    // is run for this user (tracked by a marker file in LocalAppData).
+    if (window != nullptr && !hasSeenFirstBoot()) {
+        showFirstBootSplash(window);
+    }
 
     MSG message;
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {

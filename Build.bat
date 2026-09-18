@@ -113,7 +113,7 @@ echo.
 echo  [4/4] Building... (this takes ~30 seconds to ~5 minutes)
 echo        Command: cmake --build build --config Release
 echo.
-cmake --build build --config Release
+cmake --build build --config Release --parallel
 if errorlevel 1 goto :build_failed
 
 rem ---- Find the executables (VS puts them in build\Release\, MSYS2 in build\) -
