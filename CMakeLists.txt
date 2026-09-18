@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+﻿cmake_minimum_required(VERSION 3.16)
 
 project(WhiteholePro VERSION 0.2.0 LANGUAGES CXX)
 
@@ -60,6 +60,7 @@ add_library(whitehole_core
     cpp/src/smg/galaxy_archive.cpp
     cpp/src/smg/game_archive.cpp
     cpp/src/smg/hash.cpp
+    cpp/src/smg/bti.cpp
     cpp/src/smg/stage_archive.cpp
 )
 

@@ -1,4 +1,4 @@
-#include "whitehole/db/name_table.hpp"
+﻿#include "whitehole/db/name_table.hpp"
 #include "whitehole/io/binary_file.hpp"
 #include "whitehole/io/directory_filesystem.hpp"
 #include "whitehole/io/rarc.hpp"
@@ -7,6 +7,7 @@
 #include "whitehole/render/camera.hpp"
 #include "whitehole/render/viewport_scene.hpp"
 #include "whitehole/smg/bcsv.hpp"
+#include "whitehole/smg/bti.hpp"
 #include "whitehole/smg/game_archive.hpp"
 #include "whitehole/smg/hash.hpp"
 #include "whitehole/smg/stage_archive.hpp"
@@ -486,6 +487,144 @@ void testStageAndGameModels() {
     expect(!galaxy.zones().empty(), "synthetic galaxy has no zones");
 }
 
+void testBtiDecoding() {
+    using whitehole::io::Endian;
+    using whitehole::smg::decodeBtiImage;
+    using whitehole::smg::parseBti;
+
+    // RGB565 (format 4): 4x4 of full-white word 0xFFFF -> opaque white.
+    {
+        std::vector<std::uint8_t> data(32, 0xFF);
+        auto img = decodeBtiImage(data, 0, 4, 4, 4, 0, Endian::big);
+        expect(img.width == 4 && img.height == 4, "RGB565 dimensions were not 4x4");
+        expect(img.rgba.size() == 4u * 4u * 4u, "RGB565 rgba byte count was wrong");
+        expect(img.rgba[0] == 255 && img.rgba[3] == 255, "RGB565 0xFFFF should decode to white opaque");
+    }
+
+    // RGB5A3 opaque (format 5, bit 15 set): 0xFFFF -> white opaque. One 4x4 block = 32 bytes.
+    {
+        std::vector<std::uint8_t> data(32, 0xFF);
+        auto img = decodeBtiImage(data, 0, 5, 2, 2, 0, Endian::big);
+        expect(img.rgba[0] == 255 && img.rgba[3] == 255, "RGB5A3 opaque 0xFFFF should be white opaque");
+    }
+
+    // RGB5A3 ARGB3444 (format 5, bit 15 clear): exercises the expand4 fix.
+    {
+        std::vector<std::uint8_t> maxWord(32, 0);
+        maxWord[0] = 0x7F; maxWord[1] = 0xFF; // a=7, r=15, g=15, b=15
+        auto img = decodeBtiImage(maxWord, 0, 5, 1, 1, 0, Endian::big);
+        expect(img.rgba[0] == 255 && img.rgba[3] == 255, "RGB5A3 ARGB3444 max should be opaque white");
+        std::vector<std::uint8_t> blueWord(32, 0);
+        blueWord[0] = 0x00; blueWord[1] = 0x0F; // blue nibble 15, alpha nibble 0
+        auto img2 = decodeBtiImage(blueWord, 0, 5, 1, 1, 0, Endian::big);
+        expect(img2.rgba[2] == 255, "RGB5A3 blue nibble 0xF must expand to 255 (expand4 fix)");
+        expect(img2.rgba[3] == 0, "RGB5A3 alpha nibble 0 must expand to 0");
+        std::vector<std::uint8_t> midWord(32, 0);
+        midWord[0] = 0x00; midWord[1] = 0x05; // blue nibble 5
+        auto img3 = decodeBtiImage(midWord, 0, 5, 1, 1, 0, Endian::big);
+        expect(img3.rgba[2] == 85, "RGB5A3 nibble 0x5 must expand to 85 (expand4)");
+    }
+
+
+    // IA4 (format 2): 2x2 inside one 8x4 block (32 bytes consumed).
+    {
+        std::vector<std::uint8_t> data(32, 0);
+        data[0] = 0x55; // intensity 5, alpha 5 -> expand4(5) = 85
+        data[1] = 0xFF; // intensity 15, alpha 15 -> 255
+        auto img = decodeBtiImage(data, 0, 2, 2, 2, 0, Endian::big);
+        const std::size_t p00 = (0u * img.width + 0u) * 4u;
+        const std::size_t p10 = (0u * img.width + 1u) * 4u;
+        expect(img.rgba[p00] == 85 && img.rgba[p00 + 3] == 85, "IA4 nibble 5 should expand to 85");
+        expect(img.rgba[p10] == 255, "IA4 nibble 15 should expand to 255");
+    }
+
+    // I8 (format 1): 2x2 inside one 8x4 block (32 bytes consumed).
+    {
+        std::vector<std::uint8_t> data(32, 0);
+        data[0] = 0x80;
+        data[1] = 0x10;
+        data[8] = 0xFF;
+        data[9] = 0x00;
+        auto img = decodeBtiImage(data, 0, 1, 2, 2, 0, Endian::big);
+        expect(img.rgba[0] == 0x80 && img.rgba[3] == 255, "I8 pixel (0,0) was wrong");
+        expect(img.rgba[8] == 0xFF, "I8 pixel (0,1) was wrong");
+        expect(img.rgba[12] == 0x00 && img.rgba[15] == 255, "I8 pixel (1,1) was wrong");
+    }
+
+    // C8 (format 9) palettized: rgb565 palette, entry 0 white, entry 1 black.
+    {
+        std::vector<std::uint8_t> palette = {0xFF, 0xFF, 0x00, 0x00};
+        std::vector<std::uint8_t> data(32, 0);
+        data[1] = 1;
+        data[9] = 1;
+        auto img = decodeBtiImage(data, 0, 9, 2, 2, 0, Endian::big, palette, 1);
+        expect(img.rgba[0] == 255 && img.rgba[3] == 255, "C8 palette entry 0 should map white");
+        expect(img.rgba[4] == 0 && img.rgba[7] == 255, "C8 palette entry 1 should map black");
+        expect(img.rgba[8] == 255, "C8 palette entry 0 for pixel (0,1) wrong");
+        expect(img.rgba[12] == 0 && img.rgba[15] == 255, "C8 palette entry 1 for pixel (1,1) wrong");
+    }
+
+    // CMPR (format 14): one 8x8 macro block = 32 bytes; colorA > colorB -> color3 = (2*c0+c1)/3.
+    {
+        std::vector<std::uint8_t> data(32, 0);
+        data[0] = 0xFF; data[1] = 0xFF; // colorA = 0xFFFF (white)
+        data[4] = 0x80;                 // pixel(0,0) index 2 -> color3 = 170
+        auto img = decodeBtiImage(data, 0, 14, 4, 4, 0, Endian::big);
+        expect(img.rgba[0] == 170 && img.rgba[1] == 170 && img.rgba[2] == 170 && img.rgba[3] == 255,
+               "CMPR color3 interpolation was wrong");
+    }
+
+    // CMPR: colorA <= colorB -> fourth color is transparent (alpha 0).
+    {
+        std::vector<std::uint8_t> data(32, 0);
+        data[2] = 0xFF; data[3] = 0xFF; // colorB = 0xFFFF (white), colorA = 0
+        data[4] = 0xC0;                 // pixel(0,0) index 3 -> color4 = transparent white
+        auto img = decodeBtiImage(data, 0, 14, 4, 4, 0, Endian::big);
+        expect(img.rgba[0] == 255 && img.rgba[1] == 255 && img.rgba[2] == 255 && img.rgba[3] == 0,
+               "CMPR transparent color4 must have alpha 0");
+    }
+
+    // parseBti: standalone .bti entry at entryOffset 0 (I8, 4x4).
+    {
+        std::vector<std::uint8_t> blob(64, 0);
+        blob[0] = 1;
+        blob[2] = 0; blob[3] = 4;
+        blob[4] = 0; blob[5] = 4;
+        blob[24] = 0;
+        blob[28] = 0; blob[29] = 0; blob[30] = 0; blob[31] = 32;
+        for (int i = 0; i < 16; ++i) {
+            blob[32 + i] = static_cast<std::uint8_t>(i * 8 + i);
+        }
+        const auto bti = parseBti(blob, 0, Endian::big);
+        expect(bti.width == 4 && bti.height == 4, "parseBti width/height wrong");
+        expect(bti.mipmaps.size() == 1, "parseBti should decode one mip level");
+        expect(bti.mipmaps[0].rgba.size() == 4u * 4u * 4u, "parseBti mip byte count wrong");
+        expect(bti.mipmaps[0].rgba[0] == 0 && bti.mipmaps[0].rgba[3] == 255, "parseBti I8 pixel (0,0) wrong");
+    }
+
+    // parseBti: embedded entry at a NON-zero entryOffset (absolute offset fix).
+    {
+        constexpr std::size_t prefix = 16;
+        std::vector<std::uint8_t> blob(prefix + 32 + 32, 0);
+        blob[prefix + 0] = 1;
+        blob[prefix + 2] = 0; blob[prefix + 3] = 2;
+        blob[prefix + 4] = 0; blob[prefix + 5] = 2;
+        blob[prefix + 24] = 0;
+        blob[prefix + 28] = 0; blob[prefix + 29] = 0; blob[prefix + 30] = 0; blob[prefix + 31] = 32;
+        blob[prefix + 32 + 0] = 0x80;
+        blob[prefix + 32 + 1] = 0x10;
+        blob[prefix + 32 + 8] = 0xFF;
+        blob[prefix + 32 + 9] = 0x00;
+        const auto bti = parseBti(blob, prefix, Endian::big);
+        expect(bti.width == 2 && bti.height == 2, "embedded parseBti dimensions wrong");
+        expect(bti.mipmaps.size() == 1, "embedded parseBti mip count wrong");
+        expect(bti.mipmaps[0].rgba[0] == 0x80 && bti.mipmaps[0].rgba[3] == 255, "embedded parseBti (0,0) wrong");
+        expect(bti.mipmaps[0].rgba[8] == 0xFF, "embedded parseBti (0,1) wrong");
+        expect(bti.mipmaps[0].rgba[12] == 0x00 && bti.mipmaps[0].rgba[15] == 255, "embedded parseBti (1,1) wrong");
+    }
+}
+
+
 } // namespace
 
 int main() {
@@ -503,6 +642,7 @@ int main() {
         testArchiveTableEdit();
         testNameTables();
         testStageAndGameModels();
+        testBtiDecoding();
         std::cout << "All Whitehole native core tests passed\n";
         return 0;
     } catch (const std::exception& error) {
