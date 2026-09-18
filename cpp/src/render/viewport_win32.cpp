@@ -19,6 +19,7 @@
 
 #include <GL/gl.h>
 
+#include <algorithm>
 #include <cmath>
 
 #pragma comment(lib, "opengl32.lib")
@@ -203,6 +204,17 @@ LRESULT ViewportWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam
         }
         return 0;
     case WM_MOUSEMOVE: {
+        // Arm hover tracking so WM_MOUSELEAVE clears the highlight when the
+        // cursor leaves the viewport (without this, a hovered box stays lit).
+        if (!trackingMouse_ && window_ != nullptr) {
+            TRACKMOUSEEVENT track{};
+            track.cbSize = sizeof(track);
+            track.dwFlags = TME_LEAVE;
+            track.hwndTrack = window_;
+            if (TrackMouseEvent(&track) != 0) {
+                trackingMouse_ = true;
+            }
+        }
         const int x = GET_X_LPARAM(lParam);
         const int y = GET_Y_LPARAM(lParam);
         const int dx = x - lastX_;
@@ -227,10 +239,30 @@ LRESULT ViewportWindow::handleMessage(UINT message, WPARAM wParam, LPARAM lParam
         }
         return 0;
     }
+    case WM_MOUSELEAVE:
+        trackingMouse_ = false;
+        if (hover_.has_value()) {
+            hover_.reset();
+            invalidate();
+        }
+        return 0;
     case WM_MOUSEWHEEL: {
-        const int delta = GET_WHEEL_DELTA_WPARAM(wParam);
-        camera_.dolly(delta > 0 ? 1.0F : -1.0F);
-        invalidate();
+        // Accumulate raw deltas and apply whole notches, so high-resolution
+        // wheels and multi-notch flicks zoom smoothly instead of losing input.
+        wheelAccumulator_ += GET_WHEEL_DELTA_WPARAM(wParam);
+        int notches = 0;
+        while (wheelAccumulator_ >= WHEEL_DELTA) {
+            ++notches;
+            wheelAccumulator_ -= WHEEL_DELTA;
+        }
+        while (wheelAccumulator_ <= -WHEEL_DELTA) {
+            --notches;
+            wheelAccumulator_ += WHEEL_DELTA;
+        }
+        if (notches != 0) {
+            camera_.dolly(static_cast<float>(notches));
+            invalidate();
+        }
         return 0;
     }
     case WM_KEYDOWN:
@@ -347,20 +379,13 @@ void ViewportWindow::applyCameraToGL(int width, int height) {
     const float top = tanHalf * nearPlane;
     glFrustum(-top * aspect, top * aspect, -top, top, nearPlane, farPlane);
     glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
-    const math::Vec3f eyePos = camera_.eye();
-    math::Vec3f forward{camera_.target.x - eyePos.x, camera_.target.y - eyePos.y, camera_.target.z - eyePos.z};
-    forward = forward.normalized();
-    math::Vec3f up{0.0F, 1.0F, 0.0F};
-    if (std::abs(forward.y) > 0.999F) {
-        up = {0.0F, 0.0F, forward.y > 0.0F ? -1.0F : 1.0F};
-    }
-    const math::Vec3f side = math::Vec3f::cross(forward, up).normalized();
-    const math::Vec3f realUp = math::Vec3f::cross(side, forward);
-    const float look[16] = {side.x, realUp.x, -forward.x, 0.0F, side.y, realUp.y, -forward.y, 0.0F,
-                            side.z, realUp.z, -forward.z, 0.0F, 0.0F, 0.0F, 0.0F, 1.0F};
-    glLoadMatrixf(look);
-    glTranslatef(-eyePos.x, -eyePos.y, -eyePos.z);
+    // Matrix4 keeps element (row, column) at values[4 * row + column], which is
+    // exactly the column-major layout glLoadMatrixf expects, so the rendered
+    // view is literally the CPU camera: screen picks can never drift from what
+    // is drawn (the previous hand-built look matrix was a second copy of this
+    // maths that had to be kept in sync by hand).
+    const math::Matrix4 view = camera_.viewMatrix();
+    glLoadMatrixf(view.values.data());
     glClearColor(0.09F, 0.11F, 0.15F, 1.0F);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
@@ -392,25 +417,35 @@ void ViewportWindow::drawBox(const ViewportBox& box, bool selected, bool hovered
 }
 
 void ViewportWindow::drawGrid() {
+    // The grid follows the camera: the step scales with the orbit distance and
+    // the patch stays centred (and snapped) on the orbit target, so panning
+    // across a galaxy never scrolls the grid out of view.
+    const float step = std::clamp(camera_.distance / 20.0F, 25.0F, 2000.0F);
+    constexpr int halfLines = 20;
+    const float extent = step * static_cast<float>(halfLines);
+    const float centerX = std::floor(camera_.target.x / step + 0.5F) * step;
+    const float centerZ = std::floor(camera_.target.z / step + 0.5F) * step;
+
     glDisable(GL_DEPTH_TEST);
     glBegin(GL_LINES);
     glColor3f(0.22F, 0.26F, 0.33F);
-    for (int i = -10; i <= 10; ++i) {
-        const float pos = static_cast<float>(i) * 100.0F;
-        glVertex3f(pos, 0, -1000);
-        glVertex3f(pos, 0, 1000);
-        glVertex3f(-1000, 0, pos);
-        glVertex3f(1000, 0, pos);
+    for (int i = -halfLines; i <= halfLines; ++i) {
+        const float offset = static_cast<float>(i) * step;
+        glVertex3f(centerX + offset, 0.0F, centerZ - extent);
+        glVertex3f(centerX + offset, 0.0F, centerZ + extent);
+        glVertex3f(centerX - extent, 0.0F, centerZ + offset);
+        glVertex3f(centerX + extent, 0.0F, centerZ + offset);
     }
+    // World axes, drawn across the visible patch so they stay readable.
     glColor3f(0.9F, 0.25F, 0.25F);
-    glVertex3f(-1200, 0, 0);
-    glVertex3f(1200, 0, 0);
+    glVertex3f(centerX - extent, 0.0F, 0.0F);
+    glVertex3f(centerX + extent, 0.0F, 0.0F);
     glColor3f(0.3F, 0.9F, 0.3F);
-    glVertex3f(0, -1200, 0);
-    glVertex3f(0, 1200, 0);
+    glVertex3f(0.0F, -extent, 0.0F);
+    glVertex3f(0.0F, extent, 0.0F);
     glColor3f(0.3F, 0.5F, 1.0F);
-    glVertex3f(0, 0, -1200);
-    glVertex3f(0, 0, 1200);
+    glVertex3f(0.0F, 0.0F, centerZ - extent);
+    glVertex3f(0.0F, 0.0F, centerZ + extent);
     glEnd();
     glEnable(GL_DEPTH_TEST);
 }

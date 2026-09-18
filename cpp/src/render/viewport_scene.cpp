@@ -7,27 +7,45 @@
 namespace whitehole::render {
 namespace {
 
-// Java stores rotation in degrees (dir_x/dir_y/dir_z). Keep the same
-// XYZ euler order the Java renderer applies.
+// Placement stores rotation in degrees (dir_x/dir_y/dir_z). SMG convention:
+// dir_x rotates about the Z axis, dir_y about Y and dir_z about X, applied in
+// that order — identical to the Java editor's object renderer.
 constexpr float kDegreesToRadians = 3.141592653589793F / 180.0F;
 
-// Inverse of T * R * S (no shear): transpose rotation, divide out scale.
+// Inverse of the placement matrix. The placement matrix is (in this codebase's
+// row-major storage, where transformPoint() multiplies as p * M):
+//     W = scale * rotateX * rotateY * rotateZ * translate = S * R * T
+// which has no shear, so W^-1 = R^T * S^-1 * T^-1 and every entry can be
+// written down directly.
+//
+// With A = S * R the linear part, row i of A is scale[i] * row i of R, so
+//     A(i, j) = world.values[4 * i + j]
+// and the inverse linear part A^-1 = R^T * S^-1 has entries
+//     A^-1(i, j) = R(j, i) / scale[j] = world.values[4 * j + i] / scale[j]^2.
+// The divisor must come from the entry's own COLUMN (j): using the row scale
+// (i) instead shears the inverse, which made the slab test in
+// rayIntersectsBox() report phantom hits and missed hits for rotated objects
+// that are scaled non-uniformly.
 math::Matrix4 placementWorldInverse(const math::Matrix4& world, const math::Vec3f& scale) noexcept {
     math::Matrix4 inverse;
     inverse.values.fill(0.0F);
     const float safeX = std::abs(scale.x) > 0.000001F ? scale.x : 1.0F;
     const float safeY = std::abs(scale.y) > 0.000001F ? scale.y : 1.0F;
     const float safeZ = std::abs(scale.z) > 0.000001F ? scale.z : 1.0F;
+    // Row 0: A^-1(0, j) = world(j, 0) / scale[j]^2.
     inverse.values[0] = world.values[0] / (safeX * safeX);
-    inverse.values[1] = world.values[4] / (safeX * safeX);
-    inverse.values[2] = world.values[8] / (safeX * safeX);
-    inverse.values[4] = world.values[1] / (safeY * safeY);
+    inverse.values[1] = world.values[4] / (safeY * safeY);
+    inverse.values[2] = world.values[8] / (safeZ * safeZ);
+    // Row 1: A^-1(1, j) = world(j, 1) / scale[j]^2.
+    inverse.values[4] = world.values[1] / (safeX * safeX);
     inverse.values[5] = world.values[5] / (safeY * safeY);
-    inverse.values[6] = world.values[9] / (safeY * safeY);
-    inverse.values[8] = world.values[2] / (safeZ * safeZ);
-    inverse.values[9] = world.values[6] / (safeZ * safeZ);
+    inverse.values[6] = world.values[9] / (safeZ * safeZ);
+    // Row 2: A^-1(2, j) = world(j, 2) / scale[j]^2.
+    inverse.values[8] = world.values[2] / (safeX * safeX);
+    inverse.values[9] = world.values[6] / (safeY * safeY);
     inverse.values[10] = world.values[10] / (safeZ * safeZ);
     inverse.values[15] = 1.0F;
+    // Last row: -t * A^-1 for the row-vector translation t (world row 3).
     const math::Vec3f translation{world.values[12], world.values[13], world.values[14]};
     inverse.values[12] =
         -(inverse.values[0] * translation.x + inverse.values[4] * translation.y + inverse.values[8] * translation.z);
@@ -46,14 +64,17 @@ math::Matrix4 placementWorldMatrix(const smg::PlacementObject& object) noexcept 
                                 std::abs(object.scale.z) > 0.000001F ? object.scale.z : 1.0F};
     const math::Matrix4 scaled = math::Matrix4::scale(
         {safeScale.x * kPlaceholderHalfExtent, safeScale.y * kPlaceholderHalfExtent, safeScale.z * kPlaceholderHalfExtent});
-    const math::Matrix4 rotation = math::Matrix4::rotationZ(object.rotation.z * kDegreesToRadians) *
+    const math::Matrix4 rotation = math::Matrix4::rotationZ(object.rotation.x * kDegreesToRadians) *
                                    math::Matrix4::rotationY(object.rotation.y * kDegreesToRadians) *
-                                   math::Matrix4::rotationX(object.rotation.x * kDegreesToRadians);
+                                   math::Matrix4::rotationX(object.rotation.z * kDegreesToRadians);
     return math::Matrix4::translation(object.position) * rotation * scaled;
 }
 
 std::optional<float> rayIntersectsBox(const Ray& ray, const ViewportBox& box) noexcept {
-
+    // The linear part of the placement matrix is S * R, so its row i is exactly
+    // scale[i] * (row i of the rotation). Row lengths therefore recover the
+    // per-axis world scale (including the placeholder half extent) with no
+    // approximation, which is what placementWorldInverse() expects.
     const math::Vec3f scale{math::Vec3f{box.world.values[0], box.world.values[1], box.world.values[2]}.length(),
                             math::Vec3f{box.world.values[4], box.world.values[5], box.world.values[6]}.length(),
                             math::Vec3f{box.world.values[8], box.world.values[9], box.world.values[10]}.length()};

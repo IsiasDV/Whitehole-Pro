@@ -73,6 +73,8 @@ private:
     int lastX_{0};
     int lastY_{0};
     bool leftMoved_{false};
+    int wheelAccumulator_{0};   // pending raw wheel deltas, applied in whole notches
+    bool trackingMouse_{false}; // TrackMouseEvent armed so hover clears on leave
 };
 
 } // namespace whitehole::render
