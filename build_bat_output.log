@@ -1,0 +1,27 @@
+
+ ============================================================
+  WHITEHOLE PRO - One-Click Build
+ ============================================================
+  This will build the native C++ editor. No Java needed.
+
+ Cleaning old build folder...
+ Clean done.
+
+ [1/4] Found: CMake suite maintained and supported by Kitware (kitware.com/cmake).
+ [X] No C++ compiler was found.
+
+ FIX - pick ONE:
+   A. Visual Studio 2022 Community (recommended on Windows):
+        winget install Microsoft.VisualStudio.2022.Community --silent --override "--add Microsoft.VisualStudio.Workload.NativeDesktop --includeRecommended --passive"
+      Or download from: https://visualstudio.microsoft.com/downloads/
+      (tick "Desktop development with C++" during install)
+
+   B. MSYS2 UCRT64 (lightweight, no Visual Studio):
+        winget install MSYS2.MSYS2
+      Then in the UCRT64 terminal run:
+        pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-make
+
+ Then double-click Build.bat again.
+
+Press any key to continue . . . 
+BUILDBAT_EXIT_CODE=1 

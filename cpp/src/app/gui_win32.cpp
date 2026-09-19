@@ -1,4 +1,4 @@
-#ifndef UNICODE
+﻿#ifndef UNICODE
 #define UNICODE
 #endif
 #ifndef _UNICODE
@@ -16,12 +16,8 @@
 #include "whitehole/app/settings.hpp"
 #include "whitehole/app/object_db_update.hpp"
 #include "whitehole/db/name_table.hpp"
-<<<<<<< Updated upstream
 #include "whitehole/db/object_db.hpp"
-=======
 #include "whitehole/render/object_visual.hpp"
->>>>>>> Stashed changes
-#include "whitehole/render/viewport_scene.hpp"
 #include "whitehole/util/json.hpp"
 #include "whitehole/util/text.hpp"
 #include "whitehole/render/viewport_win32.hpp"
@@ -199,7 +195,7 @@ void showFirstBootSplash(HWND owner) {
 // A small, modern face-lift for the raw-Win32 chrome: a single Segoe UI 9pt
 // font applied to the window and every child control. The manifest already
 // enables Common Controls v6, so the themed standard controls plus this font
-// are the only visible change — no new libraries required. The font handle is
+// are the only visible change â€” no new libraries required. The font handle is
 // intentionally not freed (created once per window, for the life of the app).
 void applyModernTheme(HWND window) {
     LOGFONTW logFont{};
@@ -629,19 +625,14 @@ LRESULT CALLBACK editorProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         created->zonesList = CreateWindowW(L"LISTBOX", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
                                            264, 32, 240, 360, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdZones)), nullptr, nullptr);
         created->objectsLabel = CreateWindowW(L"STATIC", L"Objects", WS_CHILD | WS_VISIBLE, 516, 12, 360, 18, window, nullptr, nullptr, nullptr);
-<<<<<<< Updated upstream
         created->searchEdit = CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
                                             516, 32, 360, 24, window,
                                             reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdSearch)), nullptr, nullptr);
-        created->objectsList = CreateWindowW(L"LISTBOX", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
-                                             516, 60, 360, 332, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdObjects)), nullptr, nullptr);
-=======
         // Owner-draw fixed: rows get the same category color chip the 3D
         // viewport uses, so list and scene share one visual language.
         created->objectsList = CreateWindowW(L"LISTBOX", L"",
                                              WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS,
-                                             516, 32, 360, 360, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdObjects)), nullptr, nullptr);
->>>>>>> Stashed changes
+                                             516, 60, 360, 332, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdObjects)), nullptr, nullptr);
 
         created->nameLabel = CreateWindowW(L"STATIC", L"Name", WS_CHILD | WS_VISIBLE, 12, 404, 50, 18, window, nullptr, nullptr, nullptr);
         created->nameEdit = CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER, 64, 400, 220, 24, window,
@@ -897,9 +888,6 @@ int runGui(const std::filesystem::path& executable, const std::filesystem::path&
     AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(fileMenu), L"File");
     HMENU viewMenu = CreatePopupMenu();
     AppendMenuW(viewMenu, MF_STRING, kIdToggleDark, L"Toggle Dark Theme");
-    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(viewMenu), L"View");
-
-    HMENU viewMenu = CreatePopupMenu();
     AppendMenuW(viewMenu, MF_STRING, kIdShowLabels, L"Show Object Labels");
     AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(viewMenu), L"View");
 
