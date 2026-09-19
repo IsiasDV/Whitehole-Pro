@@ -226,3 +226,6 @@ C:\Users\conta\Documents\GitHub\Whitehole-Pro\cpp\src\app\gui_win32.cpp(927,16):
   viewport_win32.cpp
   Generating Code...
 BUILD_EXIT_CODE=1 
+Starting build 
+Error: C:/Users/conta/Documents/GitHub/Whitehole-Pro/build is not a directory
+BUILD_EXIT_CODE=1 

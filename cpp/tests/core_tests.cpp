@@ -15,9 +15,11 @@
 #include "whitehole/util/text.hpp"
 #include "whitehole/math/geometry.hpp"
 #include "whitehole/render/camera.hpp"
+#include "whitehole/render/model_mesh.hpp"
 #include "whitehole/render/object_visual.hpp"
 #include "whitehole/render/viewport_scene.hpp"
 #include "whitehole/smg/bcsv.hpp"
+#include "whitehole/smg/bmd.hpp"
 #include "whitehole/smg/bti.hpp"
 #include "whitehole/smg/game_archive.hpp"
 #include "whitehole/smg/hash.hpp"
@@ -26,6 +28,9 @@
 #include <algorithm>
 #include <cmath>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -1042,6 +1047,407 @@ void testRealObjectDatabase() {
 #endif
 }
 
+// ---------------------------------------------------------------------------
+// BMD/BDL reading and model mesh building.
+//
+// The fixtures below are assembled by absolute offset because that is exactly
+// how J3D stores data: every array is placed by an explicit offset table, and
+// the reader has to trust those tables. Building them by hand keeps the tests
+// independent of any real game file.
+// ---------------------------------------------------------------------------
+
+void putU16(std::vector<std::uint8_t>& data, std::size_t offset, std::uint16_t value) {
+    if (data.size() < offset + 2) {
+        data.resize(offset + 2, 0);
+    }
+    data[offset] = static_cast<std::uint8_t>(value >> 8);
+    data[offset + 1] = static_cast<std::uint8_t>(value & 0xFF);
+}
+
+void putU32(std::vector<std::uint8_t>& data, std::size_t offset, std::uint32_t value) {
+    if (data.size() < offset + 4) {
+        data.resize(offset + 4, 0);
+    }
+    data[offset] = static_cast<std::uint8_t>((value >> 24) & 0xFF);
+    data[offset + 1] = static_cast<std::uint8_t>((value >> 16) & 0xFF);
+    data[offset + 2] = static_cast<std::uint8_t>((value >> 8) & 0xFF);
+    data[offset + 3] = static_cast<std::uint8_t>(value & 0xFF);
+}
+
+void putF32(std::vector<std::uint8_t>& data, std::size_t offset, float value) {
+    std::uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    putU32(data, offset, bits);
+}
+
+void putText(std::vector<std::uint8_t>& data, std::size_t offset, std::string_view text) {
+    if (data.size() < offset + text.size()) {
+        data.resize(offset + text.size(), 0);
+    }
+    for (std::size_t index = 0; index < text.size(); ++index) {
+        data[offset + index] = static_cast<std::uint8_t>(text[index]);
+    }
+}
+
+// Wraps a section body (everything after the 8-byte tag + size header) in its
+// tag and total size. Bodies are written with section-relative offsets.
+std::vector<std::uint8_t> makeSection(std::string_view tag, std::vector<std::uint8_t> body) {
+    std::vector<std::uint8_t> section(8, 0);
+    putText(section, 0, tag);
+    putU32(section, 4, static_cast<std::uint32_t>(body.size() + 8));
+    section.insert(section.end(), body.begin(), body.end());
+    return section;
+}
+
+// VTX1 with a unit quad: positions, normals and one texture coordinate array.
+// The 13-entry offset table is an ordered list (the slot positions carry no
+// meaning beyond the order), so the arrays are placed in the slots the format
+// uses for position, normal and colour data and described by the definitions.
+std::vector<std::uint8_t> makeVtx1Body() {
+    constexpr std::size_t kArrayDefinitions = 0x40;
+    constexpr std::size_t kPositionData = kArrayDefinitions + 3 * 0x10; // 0x70
+    constexpr std::size_t kNormalData = kPositionData + 4 * 3 * 4;      // 0xA0
+    constexpr std::size_t kTexCoordData = kNormalData + 4 * 3 * 4;      // 0xD0
+    constexpr std::size_t kSectionSize = kTexCoordData + 4 * 2 * 4;     // 0xF0
+
+    std::vector<std::uint8_t> body(kSectionSize - 8, 0);
+    putU32(body, 0, static_cast<std::uint32_t>(kArrayDefinitions));
+    putU32(body, 0x0C - 8 + 9 * 4, static_cast<std::uint32_t>(kPositionData));
+    putU32(body, 0x0C - 8 + 10 * 4, static_cast<std::uint32_t>(kNormalData));
+    putU32(body, 0x0C - 8 + 11 * 4, static_cast<std::uint32_t>(kTexCoordData));
+
+    const auto writeDefinition = [&body](std::size_t sectionOffset, std::uint32_t arrayType,
+                                         std::uint32_t componentCount) {
+        const std::size_t at = sectionOffset - 8;
+        putU32(body, at, arrayType);
+        putU32(body, at + 4, componentCount);
+        putU32(body, at + 8, 4); // 4 = f32
+        body[at + 0xC] = 0;      // fraction bits
+    };
+    writeDefinition(kArrayDefinitions + 0 * 0x10, 9, 1);  // positions, code 1 = XYZ
+    writeDefinition(kArrayDefinitions + 1 * 0x10, 10, 0); // normals, code 0 = XYZ
+    writeDefinition(kArrayDefinitions + 2 * 0x10, 13, 1); // texcoord 0, code 1 = UV
+
+    const float positions[4][3] = {{0.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F}, {1.0F, 1.0F, 0.0F}, {0.0F, 1.0F, 0.0F}};
+    const float texcoords[4][2] = {{0.0F, 0.0F}, {1.0F, 0.0F}, {1.0F, 1.0F}, {0.0F, 1.0F}};
+    for (std::size_t vertex = 0; vertex < 4; ++vertex) {
+        for (std::size_t component = 0; component < 3; ++component) {
+            putF32(body, kPositionData - 8 + (vertex * 3 + component) * 4, positions[vertex][component]);
+            putF32(body, kNormalData - 8 + (vertex * 3 + component) * 4, component == 2 ? 1.0F : 0.0F);
+        }
+        for (std::size_t component = 0; component < 2; ++component) {
+            putF32(body, kTexCoordData - 8 + (vertex * 2 + component) * 4, texcoords[vertex][component]);
+        }
+    }
+    return body;
+}
+
+// INF1: a root joint with one material and one shape drawn inside it, then the
+// terminator. The 0x01/0x02 opcodes exercise the hierarchy stack.
+std::vector<std::uint8_t> makeInf1Body() {
+    constexpr std::size_t kNodeTable = 0x18;
+    const std::uint16_t nodes[6][2] = {{0x10, 0}, {0x01, 0}, {0x11, 0}, {0x12, 0}, {0x02, 0}, {0x00, 0}};
+    std::vector<std::uint8_t> body(kNodeTable - 8 + 6 * 4, 0);
+    putU32(body, 0x10 - 8, 4);          // vertex count
+    putU32(body, 0x14 - 8, kNodeTable); // hierarchy data offset
+    for (std::size_t index = 0; index < 6; ++index) {
+        putU16(body, kNodeTable - 8 + index * 4, nodes[index][0]);
+        putU16(body, kNodeTable - 8 + index * 4 + 2, nodes[index][1]);
+    }
+    return body;
+}
+
+// JNT1: a single joint named "Root" with a scale of one.
+std::vector<std::uint8_t> makeJnt1Body() {
+    constexpr std::size_t kRemapTable = 0x18;
+    constexpr std::size_t kJointData = 0x20;
+    constexpr std::size_t kNameTable = 0x60;
+    constexpr std::size_t kSectionSize = 0x70;
+
+    std::vector<std::uint8_t> body(kSectionSize - 8, 0);
+    putU16(body, 0, 1); // joint count
+    putU32(body, 0x0C - 8, kJointData);
+    putU32(body, 0x10 - 8, kRemapTable);
+    putU32(body, 0x14 - 8, kNameTable);
+    putU16(body, kRemapTable - 8, 0); // remap[0] -> joint record 0
+    putF32(body, kJointData - 8 + 4, 1.0F);
+    putF32(body, kJointData - 8 + 8, 1.0F);
+    putF32(body, kJointData - 8 + 12, 1.0F);
+    putU16(body, kNameTable - 8 + 4 + 2, 8); // name string offset within the table
+    putText(body, kNameTable - 8 + 8, "Root");
+    return body;
+}
+
+// DRW1: one unweighted draw matrix pointing at joint 0.
+std::vector<std::uint8_t> makeDrw1Body() {
+    std::vector<std::uint8_t> body(0x14, 0);
+    putU16(body, 0, 1);
+    putU32(body, 0x0C - 8, 0x14); // weighted flag array
+    putU32(body, 0x10 - 8, 0x18); // matrix index array
+    putU16(body, 0x18 - 8, 0);
+    return body;
+}
+
+// SHP1: one batch, one packet, one quad primitive using byte indices.
+std::vector<std::uint8_t> makeShp1Body() {
+    constexpr std::size_t kRemapTable = 0x2C;
+    constexpr std::size_t kBatchRecord = 0x30;
+    constexpr std::size_t kAttributes = 0x58;
+    constexpr std::size_t kMatrixData = 0x78;
+    constexpr std::size_t kPacketLocations = 0x80;
+    constexpr std::size_t kPacketData = 0x88;
+    constexpr std::size_t kPacketSize = 3 + 4 * 3 + 1; // type + count + indices + terminator
+    constexpr std::size_t kSectionSize = kPacketData + kPacketSize;
+
+    std::vector<std::uint8_t> body(kSectionSize - 8, 0);
+    putU16(body, 0, 1); // batch count
+    putU32(body, 0x0C - 8, kBatchRecord);
+    putU32(body, 0x10 - 8, kRemapTable);
+    putU32(body, 0x18 - 8, kAttributes);
+    putU32(body, 0x1C - 8, 0); // matrix table (unused for single-matrix batches)
+    putU32(body, 0x20 - 8, kPacketData);
+    putU32(body, 0x24 - 8, kMatrixData);
+    putU32(body, 0x28 - 8, kPacketLocations);
+    putU16(body, kRemapTable - 8, 0); // remap[0] -> batch record 0
+
+    body[kBatchRecord - 8] = 1;            // matrix type: one matrix per packet
+    putU16(body, kBatchRecord - 8 + 4, 1); // packet count
+    putU16(body, kBatchRecord - 8 + 6, 0); // attribute list offset
+
+    const std::uint32_t attributeTypes[3] = {9, 10, 13};
+    for (std::size_t index = 0; index < 3; ++index) {
+        putU32(body, kAttributes - 8 + index * 8, attributeTypes[index]);
+        putU32(body, kAttributes - 8 + index * 8 + 4, 1); // 1 = byte indices
+    }
+    putU32(body, kAttributes - 8 + 3 * 8, 0xFF); // attribute terminator
+
+    putU32(body, kPacketLocations - 8, 8);      // packet size
+    putU32(body, kPacketLocations - 8 + 4, 0);  // packet offset within the data block
+
+    body[kPacketData - 8] = 0x80; // GX quads
+    putU16(body, kPacketData - 8 + 1, 4);
+    std::size_t cursor = kPacketData - 8 + 3;
+    for (std::size_t vertex = 0; vertex < 4; ++vertex) {
+        for (std::size_t attribute = 0; attribute < 3; ++attribute) {
+            body[cursor++] = static_cast<std::uint8_t>(vertex);
+        }
+    }
+    body[cursor] = 0; // primitive list terminator
+    return body;
+}
+
+// MAT3: one material named "mat" with a brown diffuse colour. Every index in
+// the material's 0x14C record points at entry 0 of its field table.
+std::vector<std::uint8_t> makeMat3Body() {
+    constexpr std::size_t kRecord = 0x88;
+    constexpr std::size_t kRecordSize = 0x14C;
+    constexpr std::size_t kRemapTable = 0x1D8;
+    constexpr std::size_t kNameTable = 0x1DC;
+    constexpr std::size_t kCullTable = 0x1E8;
+    constexpr std::size_t kMaterialColorTable = 0x1EC;
+    constexpr std::size_t kAmbientColorTable = 0x1F4;
+    constexpr std::size_t kColorChannelCountTable = 0x1FC;
+    constexpr std::size_t kTexGenCountTable = 0x1FD;
+    constexpr std::size_t kTevStageCountTable = 0x1FE;
+    constexpr std::size_t kZCompLocTable = 0x1FF;
+    constexpr std::size_t kDitherTable = 0x200;
+    constexpr std::size_t kZModeTable = 0x204;
+    constexpr std::size_t kColorChannelTable = 0x208;
+    constexpr std::size_t kTextureIndexTable = 0x210;
+    constexpr std::size_t kSectionSize = 0x220;
+
+    std::vector<std::uint8_t> body(kSectionSize - 8, 0);
+    putU16(body, 0, 1); // material count
+    putU32(body, 0x0C - 8, kRecord);
+    putU32(body, 0x10 - 8, kRemapTable);
+    putU32(body, 0x14 - 8, kNameTable);
+    putU32(body, 0x1C - 8, kCullTable);
+    putU32(body, 0x20 - 8, kMaterialColorTable);
+    putU32(body, 0x24 - 8, kColorChannelCountTable);
+    putU32(body, 0x28 - 8, kColorChannelTable);
+    putU32(body, 0x2C - 8, kAmbientColorTable);
+    putU32(body, 0x34 - 8, kTexGenCountTable);
+    putU32(body, 0x48 - 8, kTextureIndexTable);
+    putU32(body, 0x58 - 8, kTevStageCountTable);
+    putU32(body, 0x74 - 8, kZModeTable);
+    putU32(body, 0x78 - 8, kZCompLocTable);
+    putU32(body, 0x7C - 8, kDitherTable);
+
+    body[kRecord - 8] = 1;                       // pixel engine mode
+    putU16(body, kRemapTable - 8, 0);            // remap[0] -> material record 0
+    putU16(body, kNameTable - 8 + 4 + 2, 8);     // name string offset within the table
+    putText(body, kNameTable - 8 + 8, "mat");
+
+    body[kMaterialColorTable - 8 + 0] = 128; // diffuse RGBA8
+    body[kMaterialColorTable - 8 + 1] = 64;
+    body[kMaterialColorTable - 8 + 2] = 32;
+    body[kMaterialColorTable - 8 + 3] = 255;
+    for (std::size_t channel = 0; channel < 4; ++channel) {
+        body[kAmbientColorTable - 8 + channel] = 255;
+    }
+    for (std::size_t entry = 0; entry < 8; ++entry) {
+        putU16(body, kTextureIndexTable - 8 + entry * 2, entry == 0 ? 0 : 0xFFFF);
+    }
+    (void)kRecordSize;
+    return body;
+}
+
+// TEX1: one embedded BTI (I8, 2x2) whose image data follows its entry.
+std::vector<std::uint8_t> makeTex1Body() {
+    constexpr std::size_t kEntries = 0x14;
+    constexpr std::size_t kImage = kEntries + 32;
+    constexpr std::size_t kSectionSize = kImage + 32;
+
+    std::vector<std::uint8_t> body(kSectionSize - 8, 0);
+    putU16(body, 0, 1); // texture count
+    putU32(body, 0x0C - 8, kEntries);
+
+    const std::size_t entry = kEntries - 8;
+    body[entry] = 1;                                // format: I8
+    putU16(body, entry + 2, 2);                     // width
+    putU16(body, entry + 4, 2);                     // height
+    putU32(body, entry + 28, 32);                   // image data, relative to the entry
+    body[kImage - 8 + 0] = 0x80;
+    body[kImage - 8 + 1] = 0x10;
+    body[kImage - 8 + 8] = 0xFF;
+    body[kImage - 8 + 9] = 0x00;
+    return body;
+}
+
+// A complete bmd3 file with every section the reader understands.
+std::vector<std::uint8_t> makeTinyBmd() {
+    const std::vector<std::vector<std::uint8_t>> sections{
+        makeSection("INF1", makeInf1Body()), makeSection("VTX1", makeVtx1Body()),
+        makeSection("JNT1", makeJnt1Body()), makeSection("DRW1", makeDrw1Body()),
+        makeSection("SHP1", makeShp1Body()), makeSection("MAT3", makeMat3Body()),
+        makeSection("TEX1", makeTex1Body()),
+    };
+
+    std::size_t total = 0x20;
+    for (const auto& section : sections) {
+        total += section.size();
+    }
+
+    std::vector<std::uint8_t> file(total, 0);
+    putText(file, 0, "J3D2");
+    putText(file, 4, "bmd3");
+    putU32(file, 8, static_cast<std::uint32_t>(total));
+    putU32(file, 0xC, static_cast<std::uint32_t>(sections.size()));
+    std::size_t cursor = 0x20;
+    for (const auto& section : sections) {
+        std::copy(section.begin(), section.end(), file.begin() + static_cast<std::ptrdiff_t>(cursor));
+        cursor += section.size();
+    }
+    return file;
+}
+
+void testBmdParsing() {
+    using whitehole::render::buildModelMesh;
+    using whitehole::smg::parseBmd;
+
+    const auto bytes = makeTinyBmd();
+    const auto model = parseBmd(bytes);
+
+    expect(model.version == "bmd3", "bmd version was not read");
+    expect(model.bigEndian, "bmd byte order was not detected");
+    expect(model.vertexCount == 4, "bmd vertex count was not read");
+    expect(model.positions.size() == 4, "bmd position array size is wrong");
+    expect(std::abs(model.positions[2].x - 1.0F) < 0.001F && std::abs(model.positions[2].y - 1.0F) < 0.001F,
+           "bmd position data is wrong");
+    expect(model.normals.size() == 4 && std::abs(model.normals[0].z - 1.0F) < 0.001F, "bmd normal data is wrong");
+    expect(model.texcoords[0].size() == 4 && std::abs(model.texcoords[0][3].y - 1.0F) < 0.001F,
+           "bmd texture coordinate data is wrong");
+    expect(std::abs(model.boundsMin.x) < 0.001F && std::abs(model.boundsMax.y - 1.0F) < 0.001F,
+           "bmd model bounds are wrong");
+
+    expect(model.sceneGraph.size() == 2, "bmd scene graph size is wrong");
+    expect(model.sceneGraph[0].nodeType == 1 && model.sceneGraph[0].nodeId == 0, "bmd joint node is wrong");
+    expect(model.sceneGraph[1].nodeType == 0 && model.sceneGraph[1].nodeId == 0 &&
+               model.sceneGraph[1].materialIndex == 0 && model.sceneGraph[1].parentIndex == 0,
+           "bmd shape node is wrong");
+
+    expect(model.joints.size() == 1 && model.joints[0].name == "Root", "bmd joint name was not read");
+    expect(std::abs(model.joints[0].scale.y - 1.0F) < 0.001F, "bmd joint scale was not read");
+    expect(model.matrixWeighted.size() == 1 && !model.matrixWeighted[0], "bmd draw matrix table is wrong");
+    expect(model.matrixIndices.size() == 1 && model.matrixIndices[0] == 0, "bmd draw matrix index is wrong");
+    expect(model.findJoint("Root") != nullptr && model.findJoint("Missing") == nullptr, "bmd joint lookup failed");
+
+    expect(model.batches.size() == 1 && model.batches[0].packets.size() == 1, "bmd shape/packet count is wrong");
+    expect(model.batches[0].packets[0].primitives.size() == 1, "bmd primitive count is wrong");
+    const auto& primitive = model.batches[0].packets[0].primitives.front();
+    expect(static_cast<int>(primitive.type) == 0x80, "bmd primitive type is wrong");
+    expect(primitive.positionIndices.size() == 4, "bmd position index count is wrong");
+    expect(primitive.positionIndices[3] == 3, "bmd position indices are wrong");
+    expect(primitive.normalIndices.size() == 4 && primitive.texcoordIndices[0].size() == 4,
+           "bmd attribute indices are wrong");
+
+    expect(model.materials.size() == 1 && model.materials[0].name == "mat", "bmd material name was not read");
+    const auto& diffuse = model.materials[0].diffuseColor;
+    expect(std::abs(diffuse[0] - 128.0F / 255.0F) < 0.01F && std::abs(diffuse[2] - 32.0F / 255.0F) < 0.01F,
+           "bmd material colour was not read");
+    expect(std::abs(model.materials[0].ambientColor[1] - 1.0F) < 0.01F, "bmd ambient colour was not read");
+    expect(model.materials[0].textureIndices[0] == 0, "bmd material texture index was not read");
+    expect(model.materials[0].textureIndices[7] == -1, "bmd unused texture map should be -1");
+
+    expect(model.textures.size() == 1, "bmd texture count is wrong");
+    expect(model.textures[0].width == 2 && model.textures[0].height == 2, "bmd texture header is wrong");
+    expect(model.textures[0].base().rgba[0] == 0x80, "bmd texture pixels were not decoded");
+
+    // Mesh building: the quad becomes two triangles carrying the material.
+    const auto mesh = buildModelMesh(model);
+    expect(mesh.triangles.size() == 2, "model mesh triangle count is wrong");
+    expect(mesh.skippedPrimitives == 0, "model mesh dropped a triangle primitive");
+    expect(std::abs(mesh.boundsMax.x - 1.0F) < 0.001F && mesh.radius > 0.0F, "model mesh bounds are wrong");
+    expect(std::abs(mesh.triangles.front().color[0] - 128.0F / 255.0F) < 0.01F,
+           "model mesh lost the material colour");
+    expect(mesh.triangles.front().materialIndex == 0, "model mesh lost the material index");
+    expect(std::abs(mesh.triangles.front().b.normal.z - 1.0F) < 0.01F, "model mesh normals are wrong");
+    expect(model.valid(), "bmd model should report itself as valid");
+
+    // Little-endian files keep the same tag bytes in the other order.
+    {
+        std::vector<std::uint8_t> little(0x20, 0);
+        putText(little, 0, "2D3J");
+        putText(little, 4, "bmd3");
+        const auto parsed = parseBmd(little);
+        expect(!parsed.bigEndian, "little-endian bmd was not detected");
+        expect(parsed.version == "bmd3", "little-endian bmd version was not read");
+    }
+
+    const auto expectRejected = [](std::vector<std::uint8_t> data, const std::string& context) {
+        bool rejected = false;
+        try {
+            (void)whitehole::smg::parseBmd(data);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        expect(rejected, context);
+    };
+
+    expectRejected({}, "empty bmd was not rejected");
+    expectRejected(std::vector<std::uint8_t>(0x10, 0), "truncated bmd was not rejected");
+    {
+        auto badMagic = makeTinyBmd();
+        putText(badMagic, 0, "J3D9");
+        expectRejected(std::move(badMagic), "bmd with a bad magic was not rejected");
+    }
+    {
+        auto badSize = makeTinyBmd();
+        putU32(badSize, 0x24, 0xFFFFFFF0U); // first section size past the end of the file
+        expectRejected(std::move(badSize), "bmd with a bad section size was not rejected");
+    }
+    {
+        auto unknownSection = makeTinyBmd();
+        putText(unknownSection, 0x20, "ZZZZ");
+        expectRejected(std::move(unknownSection), "bmd with an unknown section was not rejected");
+    }
+    {
+        auto truncated = makeTinyBmd();
+        truncated.resize(0x40);
+        expectRejected(std::move(truncated), "bmd truncated mid-section was not rejected");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -1061,6 +1467,7 @@ int main() {
         testNameTables();
         testStageAndGameModels();
         testBtiDecoding();
+        testBmdParsing();
         testJsonRoundTrip();
         testSettingsRoundTrip();
         testObjectDatabase();

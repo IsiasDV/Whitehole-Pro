@@ -10,32 +10,4 @@
  [1/4] Found: CMake suite maintained and supported by Kitware (kitware.com/cmake).
  [2/4] No compiler on PATH - searching for a Visual Studio installation...
     Found Visual Studio: C:\Program Files\Microsoft Visual Studio\18\Community
-    MSVC build environment set up successfully.
- [3/4] Configuring... (creates the "build" folder)
-       Command: cmake -S . -B build
-
--- Building for: Visual Studio 18 2026
--- Selecting Windows SDK version 10.0.26100.0 to target Windows 10.0.26200.
--- The CXX compiler identification is MSVC 19.51.36257.0
--- Detecting CXX compiler ABI info
--- Detecting CXX compiler ABI info - done
--- Check for working CXX compiler: C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe - skipped
--- Detecting CXX compile features
--- Detecting CXX compile features - done
--- Configuring done (4.1s)
--- Generating done (0.3s)
--- Build files have been written to: C:/Users/conta/Documents/GitHub/Whitehole-Pro/build
-
- Configuration OK.
-
- [4/4] Building... (this takes ~30 seconds to ~5 minutes)
-       Command: cmake --build build --config Release
-
-MSBuild version 18.10.1-1.26427.6+3cd27c13e for .NET Framework
-
-  1>Checking Build System
-  Building Custom Rule C:/Users/conta/Documents/GitHub/Whitehole-Pro/CMakeLists.txt
-  settings.cpp
-User interrupt
-CMake Error: Generator: build tool execution failed, command was: C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe ALL_BUILD.vcxproj /p:Configuration=Release /p:Platform=x64 /p:VisualStudioVersion=18.0 /m /v:m
-^C
+Terminate batch job (Y/N)? 
