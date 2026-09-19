@@ -20,7 +20,6 @@
 #include <GL/gl.h>
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 
 #pragma comment(lib, "opengl32.lib")
@@ -31,40 +30,32 @@ namespace {
 constexpr wchar_t kClassName[] = L"WhiteholeProViewport";
 bool classRegistered = false;
 
-// Number of shapes matches CategoryStyle::Shape; meshes are filled lazily on
-// first paint while the GL context is current.
-constexpr int kShapeCount = 5;
-
-void ensureMeshes(bool& filled, std::vector<math::Vec3f>* meshes) {
-    if (filled) {
-        return;
-    }
-    for (int shape = 0; shape < kShapeCount; ++shape) {
-        meshes[shape] = shapeTriangles(static_cast<CategoryStyle::Shape>(shape));
-    }
-    filled = true;
-}
-
-// Flat-shaded triangle mesh draw: normals come from each face so the shapes
-// read as 3D volumes instead of flat silhouettes on the dark background.
-void drawTriangles(const std::vector<math::Vec3f>& triangles) {
-    glBegin(GL_TRIANGLES);
-    for (std::size_t index = 0; index + 2 < triangles.size(); index += 3) {
-        const math::Vec3f& a = triangles[index];
-        const math::Vec3f& b = triangles[index + 1];
-        const math::Vec3f& c = triangles[index + 2];
-        math::Vec3f normal = math::Vec3f::cross(b - a, c - a);
-        const float length = normal.length();
-        if (length > 0.000001F) {
-            normal = normal * (1.0F / length);
-        } else {
-            normal = {0.0F, 1.0F, 0.0F};
-        }
-        glNormal3f(normal.x, normal.y, normal.z);
-        glVertex3f(a.x, a.y, a.z);
-        glVertex3f(b.x, b.y, b.z);
-        glVertex3f(c.x, c.y, c.z);
-    }
+void drawUnitCube() {
+    glBegin(GL_QUADS);
+    glVertex3f(-1, -1, 1);
+    glVertex3f(1, -1, 1);
+    glVertex3f(1, 1, 1);
+    glVertex3f(-1, 1, 1);
+    glVertex3f(1, -1, -1);
+    glVertex3f(-1, -1, -1);
+    glVertex3f(-1, 1, -1);
+    glVertex3f(1, 1, -1);
+    glVertex3f(-1, 1, 1);
+    glVertex3f(1, 1, 1);
+    glVertex3f(1, 1, -1);
+    glVertex3f(-1, 1, -1);
+    glVertex3f(-1, -1, -1);
+    glVertex3f(1, -1, -1);
+    glVertex3f(1, -1, 1);
+    glVertex3f(-1, -1, 1);
+    glVertex3f(1, -1, 1);
+    glVertex3f(1, -1, -1);
+    glVertex3f(1, 1, -1);
+    glVertex3f(1, 1, 1);
+    glVertex3f(-1, -1, 1);
+    glVertex3f(-1, -1, -1);
+    glVertex3f(-1, 1, -1);
+    glVertex3f(-1, 1, 1);
     glEnd();
 }
 
@@ -127,11 +118,6 @@ void ViewportWindow::setSelected(std::optional<std::size_t> selected) {
 
 void ViewportWindow::setHover(std::optional<std::size_t> hover) {
     hover_ = hover;
-    invalidate();
-}
-
-void ViewportWindow::setShowLabels(bool showLabels) noexcept {
-    showLabels_ = showLabels;
     invalidate();
 }
 
@@ -340,33 +326,16 @@ void ViewportWindow::paint() {
     BeginPaint(window_, &paintInfo);
     if (glContext_ != nullptr && device_ != nullptr) {
         wglMakeCurrent(device_, glContext_);
-        ensureMeshes(meshesFilled_, meshes_);
         applyCameraToGL(width_, height_);
         drawGrid();
-        // Simple directional lighting + color material: category colors stay
-        // recognizable while per-face normals give the shapes depth.
-        glEnable(GL_LIGHTING);
-        glEnable(GL_LIGHT0);
-        glEnable(GL_COLOR_MATERIAL);
-        glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
-        const float ambient[]{0.42F, 0.43F, 0.48F, 1.0F};
-        const float diffuse[]{0.72F, 0.71F, 0.68F, 1.0F};
-        // Directional light fixed in eye space: always readable no matter
-        // how the camera orbits.
-        const float position[]{0.4F, 1.0F, 0.6F, 0.0F};
-        glLightfv(GL_LIGHT0, GL_AMBIENT, ambient);
-        glLightfv(GL_LIGHT0, GL_DIFFUSE, diffuse);
-        glLightfv(GL_LIGHT0, GL_POSITION, position);
-        glShadeModel(GL_FLAT);
         glEnable(GL_DEPTH_TEST);
         for (const auto& box : scene_.boxes()) {
             const bool selected = selected_.has_value() && *selected_ == box.objectIndex;
             const bool hovered = !selected && hover_.has_value() && *hover_ == box.objectIndex;
-            drawShape(box, selected, hovered);
+            drawBox(box, selected, hovered);
         }
         if (selected_.has_value() && *selected_ < scene_.boxes().size()) {
             const auto& box = scene_.boxes()[*selected_];
-            glDisable(GL_LIGHTING);
             glDisable(GL_DEPTH_TEST);
             glLineWidth(2.0F);
             glBegin(GL_LINES);
@@ -385,7 +354,6 @@ void ViewportWindow::paint() {
         }
         SwapBuffers(device_);
         wglMakeCurrent(nullptr, nullptr);
-        drawOverlay(device_);
     }
     EndPaint(window_, &paintInfo);
 }
@@ -422,170 +390,30 @@ void ViewportWindow::applyCameraToGL(int width, int height) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
-void ViewportWindow::drawShape(const ViewportBox& box, bool selected, bool hovered) {
-    const CategoryStyle& style = categoryStyle(box.category);
-    // Selection/hover tint the category color (instead of replacing it) so
-    // the category stays readable while the object is clearly highlighted.
-    float r = style.color[0];
-    float g = style.color[1];
-    float b = style.color[2];
-    if (selected) {
-        r = 0.35F * r + 0.65F * 1.00F;
-        g = 0.35F * g + 0.65F * 0.85F;
-        b = 0.35F * b + 0.65F * 0.20F;
-    } else if (hovered) {
-        r = 0.40F * r + 0.60F * 0.40F;
-        g = 0.40F * g + 0.60F * 0.80F;
-        b = 0.40F * b + 0.60F * 1.00F;
-    }
+void ViewportWindow::drawBox(const ViewportBox& box, bool selected, bool hovered) {
     glPushMatrix();
     glMultMatrixf(box.world.values.data());
-    const auto shapeIndex = static_cast<int>(style.shape);
-    if (shapeIndex >= 0 && shapeIndex < kShapeCount) {
-        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-        glEnable(GL_POLYGON_OFFSET_FILL);
-        glPolygonOffset(1.0F, 1.0F);
-        glColor3f(r, g, b);
-        drawTriangles(meshes_[static_cast<std::size_t>(shapeIndex)]);
-        glDisable(GL_POLYGON_OFFSET_FILL);
-        // Edge pass: bright for selection/hover, subtle dark otherwise.
-        glDisable(GL_LIGHTING);
-        if (selected || hovered) {
-            glColor3f(1, 1, 1);
-        } else {
-            glColor3f(0.12F, 0.15F, 0.22F);
-        }
-        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-        drawTriangles(meshes_[static_cast<std::size_t>(shapeIndex)]);
-        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-        glEnable(GL_LIGHTING);
+    if (selected) {
+        glColor3f(1.0F, 0.85F, 0.2F);
+    } else if (hovered) {
+        glColor3f(0.4F, 0.8F, 1.0F);
+    } else {
+        glColor3f(0.55F, 0.65F, 0.8F);
     }
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(1.0F, 1.0F);
+    drawUnitCube();
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    if (selected || hovered) {
+        glColor3f(1, 1, 1);
+    } else {
+        glColor3f(0.15F, 0.2F, 0.3F);
+    }
+    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    drawUnitCube();
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     glPopMatrix();
-}
-
-std::wstring toWide(std::string_view text) {
-    if (text.empty()) {
-        return {};
-    }
-    const auto size = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
-    std::wstring result(static_cast<std::size_t>(size), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), result.data(), size);
-    return result;
-}
-
-void ViewportWindow::drawOverlay(HDC device) {
-    // Legend + labels are GDI drawn on the visible (front) buffer after the
-    // swap, so they never flicker with the GL scene.
-    const HFONT oldFont = static_cast<HFONT>(SelectObject(device, GetStockObject(DEFAULT_GUI_FONT)));
-    SetBkMode(device, TRANSPARENT);
-
-    // Per-category counts: the map key for the color system.
-    constexpr std::size_t kCategoryTotal = 10;
-    std::array<int, kCategoryTotal> counts{};
-    for (const auto& box : scene_.boxes()) {
-        const auto index = static_cast<std::size_t>(box.category);
-        if (index < counts.size()) {
-            counts[index]++;
-        }
-    }
-
-    int textWidth = 0;
-    int legendLines = 0;
-    for (std::size_t index = 0; index < counts.size(); ++index) {
-        if (counts[index] == 0) {
-            continue;
-        }
-        legendLines++;
-        wchar_t line[128];
-        const auto& style = categoryStyle(static_cast<ObjectCategory>(index));
-        _snwprintf_s(line, _TRUNCATE, L"%hs \u00D7 %d", style.label, counts[index]);
-        SIZE extent{};
-        GetTextExtentPoint32W(device, line, static_cast<int>(wcsnlen_s(line, 128)), &extent);
-        textWidth = std::max(textWidth, static_cast<int>(extent.cx));
-    }
-
-    constexpr int chipSize = 10;
-    constexpr int lineStep = 18;
-    constexpr int padding = 8;
-    constexpr int legendX = 10;
-    int legendY = 10;
-    if (legendLines > 0) {
-        const int legendWidth = textWidth + chipSize + 6 + padding * 2;
-        const int legendHeight = legendLines * lineStep + padding * 2;
-        RECT background{legendX, legendY, legendX + legendWidth, legendY + legendHeight};
-        HBRUSH backBrush = CreateSolidBrush(RGB(16, 20, 28));
-        FillRect(device, &background, backBrush);
-        DeleteObject(backBrush);
-
-        int line = 0;
-        for (std::size_t index = 0; index < counts.size(); ++index) {
-            if (counts[index] == 0) {
-                continue;
-            }
-            const auto& style = categoryStyle(static_cast<ObjectCategory>(index));
-            const int y = legendY + padding + line * lineStep;
-            RECT chip{legendX + padding, y + 3, legendX + padding + chipSize, y + 3 + chipSize};
-            HBRUSH chipBrush = CreateSolidBrush(
-                RGB(static_cast<int>(style.color[0] * 255.0F), static_cast<int>(style.color[1] * 255.0F),
-                    static_cast<int>(style.color[2] * 255.0F)));
-            FillRect(device, &chip, chipBrush);
-            DeleteObject(chipBrush);
-            wchar_t text[128];
-            _snwprintf_s(text, _TRUNCATE, L"%hs \u00D7 %d", style.label, counts[index]);
-            SetTextColor(device, RGB(235, 238, 245));
-            TextOutW(device, legendX + padding + chipSize + 6, y, text, static_cast<int>(wcsnlen_s(text, 128)));
-            line++;
-        }
-        legendY += legendHeight + 6;
-    }
-
-    // Selected object line directly under the legend.
-    if (selected_.has_value() && *selected_ < scene_.boxes().size()) {
-        const auto& box = scene_.boxes()[*selected_];
-        const auto& style = categoryStyle(box.category);
-        const std::wstring text = toWide(box.name + " \u2014 " + style.label + " (" + box.kind + ")");
-        if (!text.empty()) {
-            SIZE extent{};
-            GetTextExtentPoint32W(device, text.c_str(), static_cast<int>(text.size()), &extent);
-            RECT background{legendX, legendY, legendX + extent.cx + padding * 2, legendY + 22};
-            HBRUSH backBrush = CreateSolidBrush(RGB(16, 20, 28));
-            FillRect(device, &background, backBrush);
-            DeleteObject(backBrush);
-            SetTextColor(device, RGB(255, 215, 120));
-            TextOutW(device, legendX + padding, legendY + 2, text.c_str(), static_cast<int>(text.size()));
-        }
-    }
-
-    // Object name labels. Hovered/selected are always labeled; the View menu
-    // toggle labels every object for surveying the scene.
-    if (showLabels_ || selected_.has_value() || hover_.has_value()) {
-        for (const auto& box : scene_.boxes()) {
-            const bool isSelected = selected_.has_value() && *selected_ == box.objectIndex;
-            const bool isHovered = hover_.has_value() && *hover_ == box.objectIndex;
-            if (!showLabels_ && !isSelected && !isHovered) {
-                continue;
-            }
-            const math::Vec3f labelPoint{box.center.x, box.center.y + box.halfExtents.y + 6.0F, box.center.z};
-            float x = 0.0F;
-            float y = 0.0F;
-            if (!camera_.worldToScreen(labelPoint, static_cast<float>(width_), static_cast<float>(height_), x, y)) {
-                continue;
-            }
-            const std::wstring text = toWide(box.name);
-            if (text.empty()) {
-                continue;
-            }
-            SIZE extent{};
-            GetTextExtentPoint32W(device, text.c_str(), static_cast<int>(text.size()), &extent);
-            const int left = static_cast<int>(x) - extent.cx / 2;
-            // Drop shadow keeps labels readable over bright geometry.
-            SetTextColor(device, RGB(10, 12, 18));
-            TextOutW(device, left + 1, static_cast<int>(y) + 1, text.c_str(), static_cast<int>(text.size()));
-            SetTextColor(device, isSelected ? RGB(255, 220, 130) : RGB(240, 242, 248));
-            TextOutW(device, left, static_cast<int>(y), text.c_str(), static_cast<int>(text.size()));
-        }
-    }
-    SelectObject(device, oldFont);
 }
 
 void ViewportWindow::drawGrid() {

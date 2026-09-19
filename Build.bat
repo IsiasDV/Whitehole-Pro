@@ -64,28 +64,6 @@ if "!HAVE_COMPILER!"=="1" (
     goto :configure
 )
 
-rem ---- Fallback: locate Visual Studio via vswhere and set up MSVC env ----------
-echo  [2/4] No compiler on PATH - searching for a Visual Studio installation...
-set "VSWHERE_EXE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
-if not exist "!VSWHERE_EXE!" set "VSWHERE_EXE=%ProgramFiles%\Microsoft Visual Studio\Installer\vswhere.exe"
-if exist "!VSWHERE_EXE!" (
-    for /f "usebackq delims=" %%I in (`"!VSWHERE_EXE!" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VS_INSTALL_PATH=%%I"
-    if defined VS_INSTALL_PATH (
-        if exist "!VS_INSTALL_PATH!\VC\Auxiliary\Build\vcvarsall.bat" (
-            echo     Found Visual Studio: !VS_INSTALL_PATH!
-            call "!VS_INSTALL_PATH!\VC\Auxiliary\Build\vcvarsall.bat" x64 >nul 2>&1
-            where cl >nul 2>nul && (
-                echo     MSVC build environment set up successfully.
-                set "HAVE_COMPILER=1"
-            )
-        )
-    )
-)
-
-if "!HAVE_COMPILER!"=="1" (
-    goto :configure
-)
-
 echo  [X] No C++ compiler was found.
 echo.
 echo  FIX - pick ONE:

@@ -12,11 +12,8 @@ option(WHITEHOLE_ENABLE_LTO "Enable link-time optimisation for Release builds" O
 # optimised executable instead of an unoptimised one.
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
-    # Only set the cache-variable property when CMAKE_BUILD_TYPE is actually a
-    # cache entry.  With multi-config generators (Visual Studio, Xcode) the
-    # variable is not created, so set_property(CACHE ...) would error out.
-    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
 endif()
+set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -65,7 +62,6 @@ add_library(whitehole_core
     cpp/src/io/rarc.cpp
     cpp/src/io/yaz0.cpp
     cpp/src/render/camera.cpp
-    cpp/src/render/object_visual.cpp
     cpp/src/render/viewport_scene.cpp
     cpp/src/smg/bcsv.cpp
     cpp/src/smg/field_hashes.cpp

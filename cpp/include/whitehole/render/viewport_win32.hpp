@@ -15,7 +15,6 @@
 
 #include <functional>
 #include <optional>
-#include <vector>
 #include <windows.h>
 
 namespace whitehole::render {
@@ -40,7 +39,6 @@ public:
     void setScene(ViewportScene scene);
     void setSelected(std::optional<std::size_t> selected);
     void setHover(std::optional<std::size_t> hover);
-    void setShowLabels(bool showLabels) noexcept;
     void frameAll();
     void frameSelection();
     void invalidate();
@@ -56,9 +54,8 @@ private:
     void paint();
     void updateSize(int width, int height);
     void applyCameraToGL(int width, int height);
-    void drawShape(const ViewportBox& box, bool selected, bool hovered);
+    void drawBox(const ViewportBox& box, bool selected, bool hovered);
     void drawGrid();
-    void drawOverlay(HDC device);
     std::optional<std::size_t> pickAt(int x, int y);
 
     HWND window_{nullptr};
@@ -71,7 +68,6 @@ private:
     std::optional<std::size_t> selected_;
     std::optional<std::size_t> hover_;
     SelectCallback onSelect_;
-    bool showLabels_{false};
     bool draggingLeft_{false};
     bool draggingRight_{false};
     int lastX_{0};
@@ -79,8 +75,6 @@ private:
     bool leftMoved_{false};
     int wheelAccumulator_{0};   // pending raw wheel deltas, applied in whole notches
     bool trackingMouse_{false}; // TrackMouseEvent armed so hover clears on leave
-    bool meshesFilled_{false};  // lazily built once per GL context
-    std::vector<math::Vec3f> meshes_[5]; // unit triangles, one entry per CategoryStyle::Shape
 };
 
 } // namespace whitehole::render
