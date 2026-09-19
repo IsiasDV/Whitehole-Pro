@@ -887,7 +887,6 @@ int runGui(const std::filesystem::path& executable, const std::filesystem::path&
     AppendMenuW(fileMenu, MF_STRING, kIdExit, L"Exit");
     AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(fileMenu), L"File");
     HMENU viewMenu = CreatePopupMenu();
-    AppendMenuW(viewMenu, MF_STRING, kIdToggleDark, L"Toggle Dark Theme");
     AppendMenuW(viewMenu, MF_STRING, kIdShowLabels, L"Show Object Labels");
     AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(viewMenu), L"View");
 
