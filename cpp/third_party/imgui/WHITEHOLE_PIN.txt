@@ -1,0 +1,15 @@
+Dear ImGui, `docking` branch, pinned at 2026-09-18.
+
+Upstream: https://github.com/ocornut/imgui
+Commit:   4212de7d5b651895ccfe728f4eef9595e1d8d38a ("Backends: fixed Clang -Wold-style-cast warnings.")
+
+Vendored files (all MIT, see LICENSE.txt in this directory):
+  imconfig.h, imgui.h, imgui.cpp, imgui_draw.cpp, imgui_tables.cpp,
+  imgui_widgets.cpp, imgui_internal.h,
+  imstb_rectpack.h, imstb_textedit.h, imstb_truetype.h,
+  backends/imgui_impl_win32.{h,cpp}, backends/imgui_impl_dx11.{h,cpp}
+
+imgui_demo.cpp, examples/, misc/ and docs/ are intentionally NOT vendored.
+
+To update: clone the docking branch, copy the same file set, re-run the build,
+and update the commit line above.

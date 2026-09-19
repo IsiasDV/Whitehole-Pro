@@ -60,6 +60,10 @@ add_library(whitehole_core
     cpp/src/db/shortcuts.cpp
     cpp/src/db/modelsubstitutions.cpp
     cpp/src/db/specialrenderers.cpp
+    cpp/src/edit/commands.cpp
+    cpp/src/edit/document.cpp
+    cpp/src/edit/undo.cpp
+    cpp/src/edit/validation.cpp
     cpp/src/io/binary_file.cpp
     cpp/src/io/directory_filesystem.cpp
     cpp/src/io/rarc.cpp
@@ -74,7 +78,11 @@ add_library(whitehole_core
     cpp/src/smg/game_archive.cpp
     cpp/src/smg/hash.cpp
     cpp/src/smg/bti.cpp
+<<<<<<< Updated upstream
     cpp/src/smg/bmd.cpp
+=======
+    cpp/src/smg/object_model.cpp
+>>>>>>> Stashed changes
     cpp/src/smg/stage_archive.cpp
     cpp/src/util/json.cpp
 )
@@ -106,6 +114,34 @@ add_library(whitehole_win32 INTERFACE)
 if(WHITEHOLE_HAVE_WIN32_GUI)
     target_compile_definitions(whitehole_win32 INTERFACE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
     target_link_libraries(whitehole_win32 INTERFACE comctl32 ole32 uuid shell32 comdlg32 opengl32 gdi32 winhttp)
+endif()
+
+# ---------------------------------------------------------------------------
+# Dear ImGui (docking branch), vendored so the build stays offline and every
+# executable remains a single file with no extra DLLs.
+# ---------------------------------------------------------------------------
+if(WHITEHOLE_HAVE_WIN32_GUI)
+    add_library(whitehole_imgui STATIC
+        cpp/third_party/imgui/imgui.cpp
+        cpp/third_party/imgui/imgui_draw.cpp
+        cpp/third_party/imgui/imgui_tables.cpp
+        cpp/third_party/imgui/imgui_widgets.cpp
+        cpp/third_party/imgui/backends/imgui_impl_win32.cpp
+        cpp/third_party/imgui/backends/imgui_impl_dx11.cpp
+    )
+    target_include_directories(whitehole_imgui PUBLIC cpp/third_party/imgui)
+    target_compile_features(whitehole_imgui PUBLIC cxx_std_20)
+    set_target_properties(whitehole_imgui PROPERTIES CXX_EXTENSIONS OFF)
+    # Keep third-party diagnostics quiet; our own code keeps full warnings.
+    if(MSVC)
+        target_compile_options(whitehole_imgui PRIVATE /W1 /permissive- /utf-8)
+    else()
+        target_compile_options(whitehole_imgui PRIVATE -w)
+    endif()
+    if(WIN32)
+        target_link_libraries(whitehole_imgui PUBLIC d3d11 d3dcompiler dwmapi)
+    endif()
+    whitehole_optimize(whitehole_imgui)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -141,14 +177,32 @@ if(WHITEHOLE_HAVE_WIN32_GUI)
     set(WHITEHOLE_RES_FILES "${CMAKE_CURRENT_BINARY_DIR}/generated/whitehole.rc")
 endif()
 
+# ---------------------------------------------------------------------------
+# Runtime data
+# Both executables land in the same output directory, so a POST_BUILD copy on
+# each target raced with itself under a parallel build (-j) and intermittently
+# failed with "Error copying directory". One shared target copies the data
+# once; each executable only depends on it.
+# ---------------------------------------------------------------------------
+if(CMAKE_CONFIGURATION_TYPES)
+    set(WHITEHOLE_RUNTIME_DIR "${CMAKE_BINARY_DIR}/$<CONFIG>")
+else()
+    set(WHITEHOLE_RUNTIME_DIR "${CMAKE_BINARY_DIR}")
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/data")
+    add_custom_target(whitehole-runtime-data
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/data"
+            "${WHITEHOLE_RUNTIME_DIR}/data"
+        COMMENT "Copying runtime data into ${WHITEHOLE_RUNTIME_DIR}/data"
+        VERBATIM)
+else()
+    add_custom_target(whitehole-runtime-data)
+endif()
+
 function(whitehole_copy_data target)
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/data")
-        add_custom_command(TARGET ${target} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${CMAKE_CURRENT_SOURCE_DIR}/data"
-                "$<TARGET_FILE_DIR:${target}>/data"
-            COMMENT "Copying runtime data next to ${target}")
-    endif()
+    add_dependencies(${target} whitehole-runtime-data)
 endfunction()
 
 # ---------------------------------------------------------------------------

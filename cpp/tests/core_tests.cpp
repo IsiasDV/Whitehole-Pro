@@ -6,7 +6,11 @@
 #include "whitehole/db/shortcuts.hpp"
 #include "whitehole/db/modelsubstitutions.hpp"
 #include "whitehole/db/specialrenderers.hpp"
+#include "whitehole/edit/document.hpp"
+#include "whitehole/edit/validation.hpp"
 #include "whitehole/db/object_db.hpp"
+#include "whitehole/edit/commands.hpp"
+#include "whitehole/edit/undo.hpp"
 #include "whitehole/io/binary_file.hpp"
 #include "whitehole/io/directory_filesystem.hpp"
 #include "whitehole/io/rarc.hpp"
@@ -23,6 +27,7 @@
 #include "whitehole/smg/bti.hpp"
 #include "whitehole/smg/game_archive.hpp"
 #include "whitehole/smg/hash.hpp"
+#include "whitehole/smg/object_model.hpp"
 #include "whitehole/smg/stage_archive.hpp"
 
 #include <algorithm>
@@ -34,6 +39,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -481,6 +487,65 @@ void testBcsvEndianness() {
     }
 }
 
+void testBcsvMutation() {
+    using whitehole::io::Endian;
+    using whitehole::smg::BcsvTable;
+    using whitehole::smg::BcsvType;
+
+    BcsvTable table(makeTinyBcsv(Endian::big), Endian::big);
+    expect(table.hasField("number"), "hasField(number) failed");
+    expect(!table.hasField("not_a_field"), "hasField reported a missing field");
+    expect(table.rawValue(table.rows()[0], "number") != nullptr, "rawValue(name) failed");
+
+    // Type-aware setters keep the stored variant in step with the field type.
+    table.setInt(table.rows()[0], "number", 1234);
+    expect(table.getInt(table.rows()[0], "number") == 1234, "setInt/getInt failed");
+    table.setBool(table.rows()[0], "number", true);
+    expect(table.getBool(table.rows()[0], "number"), "setBool/getBool failed");
+
+    // addRow appends a default-valued row sized to the current schema.
+    const auto added = table.addRow();
+    expect(added == 1, "addRow should append at index 1");
+    expect(table.getInt(table.rows()[added], "number") == 0, "addRow default integer wrong");
+    expect(table.getString(table.rows()[added], "label").empty(), "addRow default string wrong");
+
+    // cloneRow copies the source values into a new row right after it.
+    table.setInt(table.rows()[0], "number", 7);
+    const auto cloned = table.cloneRow(0);
+    expect(cloned == 1, "cloneRow should insert after the source row");
+    expect(table.getInt(table.rows()[cloned], "number") == 7, "cloneRow did not copy the value");
+    expect(table.getString(table.rows()[cloned], "label") == "Comet", "cloneRow did not copy the string");
+
+    // ensureField widens every row and is idempotent.
+    const auto flagIndex = table.ensureField("flag", BcsvType::byte);
+    expect(table.fields()[flagIndex].type == BcsvType::byte, "ensureField stored the wrong type");
+    expect(table.ensureField("flag", BcsvType::integer) == flagIndex, "ensureField is not idempotent");
+    for (const auto& row : table.rows()) {
+        expect(row.values.size() == table.fields().size(), "ensureField left a ragged row");
+    }
+    table.setInt(table.rows()[0], "flag", 1);
+    expect(table.getInt(table.rows()[0], "flag") == 1, "byte field set/get failed");
+
+    const BcsvTable rewritten(table.serialize(), Endian::big);
+    expectTablesEqual(table, rewritten, "mutated BCSV round trip");
+
+    // removeRow reports out-of-range indices instead of corrupting the table.
+    const auto before = table.rows().size();
+    expect(!table.removeRow(before), "removeRow accepted an out-of-range index");
+    expect(table.removeRow(before - 1), "removeRow rejected a valid index");
+    expect(table.rows().size() == before - 1, "removeRow did not shrink the table");
+
+    // A table with no schema cannot size a new row.
+    BcsvTable empty;
+    bool threw = false;
+    try {
+        (void)empty.addRow();
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    expect(threw, "addRow should refuse a table without fields");
+}
+
 void testProjectArchives() {
     const auto templates = std::filesystem::path(WHITEHOLE_SOURCE_DIR) / "data" / "templates";
     std::size_t archiveCount = 0;
@@ -545,6 +610,402 @@ void testArchiveTableEdit() {
     const whitehole::smg::BcsvTable savedTable(saved.read(*savedEntry), saved.endian());
     expect(std::get<std::int32_t>(savedTable.rows()[0].values[0]) == 77,
            "edited BCSV value did not survive archive recompression");
+}
+
+void testUndoStack() {
+    using whitehole::edit::IUndo;
+    using whitehole::edit::UndoMultiEntry;
+    using whitehole::edit::UndoStack;
+
+    // Minimal command that appends text, so stack semantics are observable
+    // without touching any game data.
+    struct TextCommand final : IUndo {
+        TextCommand(std::string* target, std::string text, std::string action)
+            : target(target), text(std::move(text)), action(std::move(action)) {}
+        void undo() override { target->erase(target->size() - text.size()); }
+        void redo() override { *target += text; }
+        [[nodiscard]] std::string label() const override { return action; }
+        std::string* target;
+        std::string text;
+        std::string action;
+    };
+
+    std::string log;
+    UndoStack stack;
+    expect(!stack.canUndo() && !stack.canRedo(), "a fresh undo stack should be empty");
+    expect(stack.undoLabel().empty(), "an empty undo stack should have no undo label");
+
+    log += "a";
+    stack.push(std::make_unique<TextCommand>(&log, "a", "Add a"));
+    log += "b";
+    stack.push(std::make_unique<TextCommand>(&log, "b", "Add b"));
+    expect(log == "ab", "push() must not re-apply an already-applied command");
+    expect(stack.size() == 2 && stack.cursor() == 2, "undo stack depth/cursor wrong");
+    expect(stack.undoLabel() == "Add b", "undo label should name the newest command");
+
+    expect(stack.undo(), "undo() should report success");
+    expect(log == "a", "undo did not revert the newest command");
+    expect(stack.canRedo() && stack.redoLabel() == "Add b", "redo label wrong after undo");
+    expect(stack.redoCount() == 1, "redo count wrong after undo");
+
+    expect(stack.redo(), "redo() should report success");
+    expect(log == "ab", "redo did not re-apply the command");
+    expect(stack.redoCount() == 0, "redo count should be zero after redo");
+
+    // Pushing after an undo discards the redo branch.
+    expect(stack.undo(), "second undo failed");
+    expect(log == "a", "second undo did not revert");
+    log += "c";
+    stack.push(std::make_unique<TextCommand>(&log, "c", "Add c"));
+    expect(!stack.canRedo(), "pushing after an undo should drop the redo branch");
+    expect(stack.size() == 2, "the redo branch was not dropped");
+    expect(log == "ac", "pushing a new command must not re-apply it");
+
+    // A null entry is ignored rather than crashing.
+    stack.push(nullptr);
+    expect(stack.size() == 2, "a null undo entry should be ignored");
+
+    stack.clear();
+    expect(!stack.canUndo() && stack.size() == 0 && stack.cursor() == 0, "clear did not reset the stack");
+
+    // A multi entry undoes in reverse order and redoes in insertion order.
+    std::string multi;
+    auto group = std::make_unique<UndoMultiEntry>("Move 2 objects");
+    multi += "x";
+    group->add(std::make_unique<TextCommand>(&multi, "x", "Add x"));
+    multi += "y";
+    group->add(std::make_unique<TextCommand>(&multi, "y", "Add y"));
+    expect(group->size() == 2 && !group->empty(), "multi entry size wrong");
+    expect(group->label() == "Move 2 objects", "multi entry label wrong");
+    group->undo();
+    expect(multi.empty(), "multi undo should unwind every child");
+    group->redo();
+    expect(multi == "xy", "multi redo should re-apply every child in order");
+}
+
+void testStageEditCommands() {
+    using whitehole::edit::addObject;
+    using whitehole::edit::applyRowEdit;
+    using whitehole::edit::applyTransform;
+    using whitehole::edit::captureRowValues;
+    using whitehole::edit::removeObject;
+    using whitehole::edit::UndoStack;
+
+    const auto templates = std::filesystem::path(WHITEHOLE_SOURCE_DIR) / "data" / "templates";
+    auto stage = whitehole::smg::StageArchive::openMapFile(templates / "SMG2BigGalaxyMap.arc");
+    expect(!stage.tables().empty() && !stage.objects().empty(), "template stage has nothing to edit");
+
+    UndoStack stack;
+    const auto tableIndex = stage.objects()[0].tableIndex;
+    const auto rowIndex = stage.objects()[0].rowIndex;
+    expect(tableIndex < stage.tables().size(), "first object points at a missing table");
+
+    // ---- transform edit (the drag/rotate/scale case) ---------------------
+    const auto before = stage.readObject(tableIndex, rowIndex);
+    auto after = before;
+    after.position.y = before.position.y + 1.0F;
+    expect(applyTransform(stage, stack, {before}, {after}, "Move object"),
+           "applyTransform refused a valid edit");
+    expect(std::abs(stage.readObject(tableIndex, rowIndex).position.y - after.position.y) < 1e-6F,
+           "the transform edit did not reach the table");
+    expect(stack.undo(), "transform undo failed");
+    expect(std::abs(stage.readObject(tableIndex, rowIndex).position.y - before.position.y) < 1e-6F,
+           "transform undo did not restore the original position");
+    expect(stack.redo(), "transform redo failed");
+    expect(std::abs(stage.readObject(tableIndex, rowIndex).position.y - after.position.y) < 1e-6F,
+           "transform redo did not re-apply the move");
+
+    // ---- property edit through the raw row ------------------------------
+    const auto originalRow = captureRowValues(stage, tableIndex, rowIndex);
+    auto editedRow = originalRow;
+    bool changed = false;
+    for (std::size_t field = 0; field < editedRow.size(); ++field) {
+        // Only 32-bit integer fields coerce back to the same variant arm, which
+        // keeps the round-trip comparison exact.
+        if (std::holds_alternative<std::int32_t>(editedRow[field])) {
+            editedRow[field] = std::get<std::int32_t>(editedRow[field]) + 1;
+            changed = true;
+            break;
+        }
+    }
+    expect(changed, "the template row has no integer field to edit");
+    expect(applyRowEdit(stage, stack, tableIndex, rowIndex, editedRow, "Edit property"),
+           "applyRowEdit refused a valid edit");
+    expect(captureRowValues(stage, tableIndex, rowIndex) == editedRow,
+           "the property edit did not reach the table");
+    expect(stack.undo(), "property undo failed");
+    expect(captureRowValues(stage, tableIndex, rowIndex) == originalRow,
+           "property undo did not restore the row");
+    expect(stack.redo(), "property redo failed");
+    expect(captureRowValues(stage, tableIndex, rowIndex) == editedRow,
+           "property redo did not re-apply the change");
+
+    // ---- add / remove keep the placement list in step with the tables -----
+    const auto objectsBefore = stage.objects().size();
+    const auto rowsBefore = stage.tables()[tableIndex].table.rows().size();
+    const auto newRow = addObject(stage, stack, tableIndex, editedRow, "Add object");
+    expect(newRow == rowsBefore, "an added object should append at the end of its table");
+    expect(stage.tables()[tableIndex].table.rows().size() == rowsBefore + 1,
+           "addObject did not grow the table");
+    expect(stage.objects().size() == objectsBefore + 1,
+           "addObject did not grow the placement list");
+    expect(stack.undo(), "add undo failed");
+    expect(stage.tables()[tableIndex].table.rows().size() == rowsBefore,
+           "add undo did not shrink the table");
+    expect(stage.objects().size() == objectsBefore, "add undo did not shrink the placement list");
+    expect(stack.redo(), "add redo failed");
+    expect(stage.objects().size() == objectsBefore + 1, "add redo did not restore the object");
+
+    expect(removeObject(stage, stack, tableIndex, newRow, "Delete object"),
+           "removeObject refused a valid edit");
+    expect(stage.objects().size() == objectsBefore, "remove did not shrink the placement list");
+    expect(stack.undo(), "remove undo failed");
+    expect(stage.objects().size() == objectsBefore + 1, "remove undo did not restore the object");
+
+    // Stale indices are refused instead of corrupting the stack.
+    const auto depth = stack.size();
+    expect(!applyRowEdit(stage, stack, tableIndex, stage.tables()[tableIndex].table.rows().size(),
+                         editedRow, "stale"),
+           "applyRowEdit accepted an out-of-range row");
+    expect(!removeObject(stage, stack, tableIndex, 999999, "stale"),
+           "removeObject accepted an out-of-range row");
+    expect(stack.size() == depth, "a refused edit must not touch the undo stack");
+
+    // ---- edited data still round-trips through a real save ---------------
+    const auto saved = std::filesystem::temp_directory_path() / "whitehole_undo_roundtrip.arc";
+    stage.saveTo(saved);
+    const auto reopened = whitehole::smg::StageArchive::openMapFile(saved);
+    expect(reopened.tables()[tableIndex].table.rows().size()
+               == stage.tables()[tableIndex].table.rows().size(),
+           "the edited archive did not round-trip its table size");
+    expect(reopened.objects().size() == stage.objects().size(),
+           "the edited archive did not round-trip its object count");
+    std::filesystem::remove(saved);
+}
+
+void testObjectModel() {
+    using whitehole::db::ObjectDatabase;
+    using whitehole::db::PropertyKind;
+    using whitehole::edit::UndoStack;
+    using whitehole::smg::ObjectModel;
+    using whitehole::smg::propertyKindLabel;
+
+    const auto root = std::filesystem::path(WHITEHOLE_SOURCE_DIR);
+    ObjectDatabase database;
+    database.load(root / "data" / "objectdb.json");
+    expect(!database.empty(), "objectdb.json did not load for the object model test");
+
+    auto stage = whitehole::smg::StageArchive::openMapFile(root / "data" / "templates" / "SMG2BigGalaxyMap.arc");
+    ObjectModel model(stage, database, 2);
+    expect(model.objectCount() > 0, "object model saw no objects");
+    expect(model.gameType() == 2, "object model game type wrong");
+
+    // Prefer an object the database knows, so class metadata is exercised.
+    std::size_t objectIndex = 0;
+    bool classFound = false;
+    for (std::size_t index = 0; index < model.objectCount(); ++index) {
+        const auto* info = model.objectClass(index);
+        if (info != nullptr && !info->properties.empty()) {
+            objectIndex = index;
+            classFound = true;
+            break;
+        }
+    }
+
+    // Base transform fields are always offered, whatever the database knows.
+    const auto fields = model.fields(objectIndex);
+    expect(fields.size() >= 10, "object model returned fewer than the base transform fields");
+    bool sawName = false;
+    bool sawPosX = false;
+    for (const auto& field : fields) {
+        if (field.identifier == "name") {
+            sawName = true;
+            expect(field.present, "the name field should be present");
+            expect(field.label == "Name", "the name field label is wrong");
+            expect(field.kind == PropertyKind::Text, "the name field should be text");
+        }
+        if (field.identifier == "pos_x") {
+            sawPosX = true;
+            expect(field.present, "the pos_x field should be present");
+            expect(field.kind == PropertyKind::Float, "pos_x should be a float");
+        }
+    }
+    expect(sawName && sawPosX, "the base transform fields are missing from the object model");
+    if (classFound) {
+        // Class metadata must reach the field list with its human label.
+        bool sawMetadata = false;
+        for (const auto& field : fields) {
+            if (!field.label.empty() && field.label != field.identifier) {
+                sawMetadata = true;
+                break;
+            }
+        }
+        expect(sawMetadata, "class metadata did not reach the field list");
+    }
+
+    // Reads agree with the placement list.
+    float posX = 0.0F;
+    expect(model.getFloat(objectIndex, "pos_x", posX), "getFloat(pos_x) failed");
+    expect(std::abs(posX - stage.objects()[objectIndex].position.x) < 1e-6F,
+           "pos_x read disagrees with the placement list");
+    std::string name;
+    expect(model.getString(objectIndex, "name", name), "getString(name) failed");
+    expect(name == stage.objects()[objectIndex].name, "name read disagrees with the placement list");
+
+    // Writes record undo and keep the placement list in step.
+    UndoStack stack;
+    const auto originalY = stage.objects()[objectIndex].position.y;
+    expect(model.setFloat(objectIndex, "pos_y", originalY + 5.0F, stack, "Move object"),
+           "setFloat(pos_y) failed");
+    expect(stack.size() == 1 && stack.undoLabel() == "Move object",
+           "setFloat did not record exactly one named undo entry");
+    expect(std::abs(stage.objects()[objectIndex].position.y - (originalY + 5.0F)) < 1e-6F,
+           "setFloat did not update the placement list");
+    expect(stack.undo(), "undo after setFloat failed");
+    expect(std::abs(stage.objects()[objectIndex].position.y - originalY) < 1e-6F,
+           "undo did not restore pos_y");
+    expect(stack.redo(), "redo after setFloat failed");
+    expect(std::abs(stage.objects()[objectIndex].position.y - (originalY + 5.0F)) < 1e-6F,
+           "redo did not re-apply pos_y");
+
+    // A no-op set is accepted but must not pollute the undo history.
+    const auto depth = stack.size();
+    expect(model.setFloat(objectIndex, "pos_y", originalY + 5.0F, stack, "no-op"),
+           "a no-op setFloat should still report success");
+    expect(stack.size() == depth, "a no-op edit must not add an undo entry");
+
+    // Absent fields and out-of-range objects are refused.
+    float unused = 0.0F;
+    expect(!model.getFloat(objectIndex, "definitely_not_a_field", unused),
+           "getFloat accepted a missing field");
+    expect(!model.setFloat(objectIndex, "definitely_not_a_field", 1.0F, stack, "bad"),
+           "setFloat accepted a missing field");
+    expect(!model.setFloat(999999, "pos_x", 1.0F, stack, "bad"),
+           "setFloat accepted an out-of-range object");
+
+    // A typed accessor rejects the wrong storage type.
+    std::string text;
+    expect(!model.getString(objectIndex, "pos_x", text), "getString should reject a float field");
+
+    expect(propertyKindLabel(PropertyKind::Float) == "float", "propertyKindLabel(float) is wrong");
+    expect(propertyKindLabel(PropertyKind::SwitchId) == "switch", "propertyKindLabel(switch) is wrong");
+}
+
+void testValidation() {
+    using whitehole::db::ObjectDatabase;
+    using whitehole::edit::Severity;
+    using whitehole::edit::toString;
+    using whitehole::edit::validateStage;
+
+    const auto root = std::filesystem::path(WHITEHOLE_SOURCE_DIR);
+    ObjectDatabase database;
+    database.load(root / "data" / "objectdb.json");
+    expect(!database.empty(), "objectdb.json did not load for the validation test");
+
+    auto stage = whitehole::smg::StageArchive::openMapFile(root / "data" / "templates" / "SMG2BigGalaxyMap.arc");
+    expect(!stage.objects().empty(), "template stage has no objects to validate");
+
+    // An empty database means "nothing to validate against", not a wall of errors.
+    ObjectDatabase blank;
+    expect(validateStage(stage, blank, 2).empty(),
+           "validation should stay silent without a database");
+
+    // Force two known problems on the first object.
+    auto& objects = stage.objects();
+    objects[0].name = "WhiteholeDefinitelyNotAnObject";
+    objects[0].scale = {0.0F, 0.0F, 0.0F};
+    stage.applyEdits();
+
+    const auto report = validateStage(stage, database, 2);
+    expect(!report.findings.empty(), "validation found nothing in a stage with a bogus object");
+    expect(report.findings.size() == report.count(Severity::Info) + report.count(Severity::Warning)
+               + report.count(Severity::Error),
+           "finding severities do not add up to the finding count");
+    expect(!report.clean(), "a report with warnings should not be clean");
+
+    bool unknown = false;
+    bool zeroScale = false;
+    for (const auto& finding : report.findings) {
+        if (finding.code == "unknown-object" && finding.objectIndex == 0 && !finding.hint.empty()) {
+            unknown = true;
+        }
+        if (finding.code == "zero-scale" && finding.objectIndex == 0) {
+            zeroScale = true;
+        }
+    }
+    expect(unknown, "the bogus object was not reported as unknown");
+    expect(zeroScale, "zero scale was not reported");
+
+    expect(toString(Severity::Warning) == "warning", "the warning severity name is wrong");
+    expect(toString(Severity::Error) == "error", "the error severity name is wrong");
+}
+
+void testDocument() {
+    using whitehole::db::ObjectDatabase;
+    using whitehole::edit::Document;
+    using whitehole::edit::Severity;
+
+    const auto root = std::filesystem::path(WHITEHOLE_SOURCE_DIR);
+    ObjectDatabase database;
+    database.load(root / "data" / "objectdb.json");
+
+    Document document;
+    document.setDatabase(&database);
+    expect(!document.hasStage(), "a fresh document should have no stage");
+    expect(!document.dirty(), "a fresh document should be clean");
+
+    int changes = 0;
+    document.setOnChange([&changes] { ++changes; });
+
+    document.openMapFile(root / "data" / "templates" / "SMG2BigGalaxyMap.arc");
+    expect(document.hasStage(), "openMapFile did not open a stage");
+    expect(!document.zoneName().empty(), "openMapFile did not set the zone name");
+    expect(!document.dirty(), "opening a file must not mark the document dirty");
+    expect(changes > 0, "opening a file should notify observers");
+    expect(document.stage() != nullptr && !document.stage()->objects().empty(),
+           "the opened stage has no objects");
+
+    // Selection is multi-select aware, and selecting is not an edit.
+    document.select(0);
+    expect(document.selection().size() == 1 && document.isSelected(0), "single selection failed");
+    document.select(1, true);
+    expect(document.selection().size() == 2 && document.isSelected(1), "additive selection failed");
+    document.select(1, true);
+    expect(document.selection().size() == 2, "additive selection duplicated an index");
+    document.clearSelection();
+    expect(document.selection().empty(), "clearSelection failed");
+    expect(!document.dirty(), "selection changes must not mark the document dirty");
+
+    // An edit is undoable and flips the dirty flag; undoing back is clean again.
+    const auto originalY = document.stage()->objects()[0].position.y;
+    auto model = document.objectModel();
+    expect(model.setFloat(0, "pos_y", originalY + 3.0F, document.undoStack(), "Move object"),
+           "editing through the document failed");
+    expect(document.dirty(), "an edit should mark the document dirty");
+    expect(document.canUndo() && document.undoLabel() == "Move object", "undo state is wrong");
+    expect(document.undo(), "document.undo() failed");
+    expect(!document.dirty(), "undoing back to the save point should report clean");
+    expect(!document.undo(), "undo should stop at the start of history");
+    expect(document.redo(), "document.redo() failed");
+    expect(document.dirty(), "redo should mark the document dirty again");
+
+    // Saving records a new save point and round-trips the change.
+    const auto saved = std::filesystem::temp_directory_path() / "whitehole_document_roundtrip.arc";
+    document.saveAs(saved);
+    expect(!document.dirty(), "save should clear the dirty flag");
+    const auto reopened = whitehole::smg::StageArchive::openMapFile(saved);
+    expect(std::abs(reopened.objects()[0].position.y - (originalY + 3.0F)) < 1e-6F,
+           "the saved document did not round-trip the edit");
+    std::filesystem::remove(saved);
+
+    // Validation is reachable straight from the document.
+    const auto report = document.validate();
+    expect(report.findings.size() == report.count(Severity::Info) + report.count(Severity::Warning)
+               + report.count(Severity::Error),
+           "document validation severities do not add up");
+
+    document.close();
+    expect(!document.hasStage() && !document.dirty(), "close did not reset the document");
 }
 
 void testNameTables() {
@@ -1461,6 +1922,12 @@ int main() {
         testObjectVisual();
         testHashes();
         testBcsvEndianness();
+        testBcsvMutation();
+        testUndoStack();
+        testStageEditCommands();
+        testObjectModel();
+        testValidation();
+        testDocument();
         testRarcEndianness();
         testProjectArchives();
         testArchiveTableEdit();

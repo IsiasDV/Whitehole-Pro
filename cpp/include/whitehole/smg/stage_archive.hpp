@@ -29,8 +29,19 @@ public:
     [[nodiscard]] const std::string& stageName() const noexcept { return stageName_; }
     [[nodiscard]] const std::filesystem::path& sourcePath() const noexcept { return sourcePath_; }
     [[nodiscard]] const std::vector<ObjectTable>& tables() const noexcept { return tables_; }
+    [[nodiscard]] std::vector<ObjectTable>& tables() noexcept { return tables_; }
     [[nodiscard]] const std::vector<PlacementObject>& objects() const noexcept { return objects_; }
     [[nodiscard]] std::vector<PlacementObject>& objects() noexcept { return objects_; }
+
+    // Re-derives the placement list from the current tables. Undo/redo mutates
+    // table rows directly, so call this afterwards to keep objects() in step.
+    void rebuildObjects();
+    // Writes one placement object's name and transform into its table row.
+    // Out-of-range indices are ignored.
+    void writeObject(const PlacementObject& object);
+    // Reads the placement object at a table row. Throws std::out_of_range when
+    // the table or row does not exist.
+    [[nodiscard]] PlacementObject readObject(std::size_t tableIndex, std::size_t rowIndex) const;
 
     void applyEdits();
     void save();

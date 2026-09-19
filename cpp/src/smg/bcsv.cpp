@@ -73,6 +73,93 @@ void writePacked(std::vector<std::uint8_t>& output, std::size_t offset, std::siz
     }
 }
 
+bool isIntegerType(BcsvType type) noexcept {
+    return type == BcsvType::integer || type == BcsvType::integer2
+        || type == BcsvType::shortInteger || type == BcsvType::byte;
+}
+
+// Stores `input` in the variant arm that matches the field's declared width.
+void assignInteger(BcsvValue& value, BcsvType type, std::int32_t input) {
+    switch (type) {
+    case BcsvType::integer:
+    case BcsvType::integer2:
+        value = input;
+        return;
+    case BcsvType::shortInteger:
+        value = static_cast<std::int16_t>(input);
+        return;
+    case BcsvType::byte:
+        value = static_cast<std::int8_t>(input);
+        return;
+    case BcsvType::floatingPoint:
+        value = static_cast<float>(input);
+        return;
+    default:
+        throw std::logic_error("BCSV field is not an integer type");
+    }
+}
+
+std::size_t fieldWidth(BcsvType type) {
+    const auto rawType = static_cast<std::uint8_t>(type);
+    if (rawType >= fieldSizes.size()) {
+        throw std::runtime_error("Cannot size an unsupported BCSV field type");
+    }
+    return fieldSizes[rawType];
+}
+
+std::int32_t asInteger(const BcsvValue& value) {
+    return std::visit([](const auto& item) -> std::int32_t {
+        using Item = std::decay_t<decltype(item)>;
+        if constexpr (std::is_same_v<Item, std::string>) {
+            return 0;
+        } else {
+            return static_cast<std::int32_t>(item);
+        }
+    }, value);
+}
+
+float asFloat(const BcsvValue& value) {
+    return std::visit([](const auto& item) -> float {
+        using Item = std::decay_t<decltype(item)>;
+        if constexpr (std::is_same_v<Item, std::string>) {
+            return 0.0F;
+        } else {
+            return static_cast<float>(item);
+        }
+    }, value);
+}
+
+std::string asString(const BcsvValue& value) {
+    return std::visit([](const auto& item) -> std::string {
+        using Item = std::decay_t<decltype(item)>;
+        if constexpr (std::is_same_v<Item, std::string>) {
+            return item;
+        } else {
+            return {};
+        }
+    }, value);
+}
+
+// Forces `value` into the variant arm the field's declared type expects, so a
+// restored snapshot can never cause std::get<> to throw during serialization.
+BcsvValue coerceToType(const BcsvValue& value, BcsvType type) {
+    switch (type) {
+    case BcsvType::integer:
+    case BcsvType::integer2:
+        return std::int32_t{asInteger(value)};
+    case BcsvType::shortInteger:
+        return static_cast<std::int16_t>(asInteger(value));
+    case BcsvType::byte:
+        return static_cast<std::int8_t>(asInteger(value));
+    case BcsvType::floatingPoint:
+        return asFloat(value);
+    case BcsvType::fixedString:
+    case BcsvType::stringOffset:
+        return asString(value);
+    }
+    return std::int32_t{0};
+}
+
 } // namespace
 
 BcsvTable::BcsvTable(std::vector<std::uint8_t> data, io::Endian endian) : endian_(endian) {
@@ -169,6 +256,11 @@ std::int32_t BcsvTable::getIntById(const BcsvRow& row, std::uint32_t hash, std::
     }, row.values[*index]);
 }
 
+std::int32_t BcsvTable::getInt(const BcsvRow& row, std::string_view name,
+                               std::int32_t fallback) const {
+    return getIntById(row, jmapHash(name), fallback);
+}
+
 void BcsvTable::setString(BcsvRow& row, std::string_view name, std::string value) {
     const auto index = fieldIndex(name);
     if (!index || *index >= row.values.size()) {
@@ -187,6 +279,157 @@ void BcsvTable::setFloat(BcsvRow& row, std::string_view name, float value) {
     if (std::holds_alternative<float>(row.values[*index])) {
         row.values[*index] = value;
     }
+}
+
+bool BcsvTable::hasField(std::string_view name) const {
+    return fieldIndex(name).has_value();
+}
+
+bool BcsvTable::getBool(const BcsvRow& row, std::string_view name, bool fallback) const {
+    const auto index = fieldIndex(name);
+    if (!index) {
+        return fallback;
+    }
+    return getBoolById(row, fields_[*index].hash, fallback);
+}
+
+bool BcsvTable::getBoolById(const BcsvRow& row, std::uint32_t hash, bool fallback) const {
+    const auto index = fieldIndex(hash);
+    if (!index || *index >= row.values.size()) {
+        return fallback;
+    }
+    return std::visit([&fallback](const auto& value) -> bool {
+        using Item = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<Item, std::string>) {
+            return fallback;
+        } else if constexpr (std::is_same_v<Item, float>) {
+            return value != 0.0F;
+        } else {
+            return value != 0;
+        }
+    }, row.values[*index]);
+}
+
+const BcsvValue* BcsvTable::rawValue(const BcsvRow& row, std::uint32_t hash) const {
+    const auto index = fieldIndex(hash);
+    if (!index || *index >= row.values.size()) {
+        return nullptr;
+    }
+    return &row.values[*index];
+}
+
+const BcsvValue* BcsvTable::rawValue(const BcsvRow& row, std::string_view name) const {
+    return rawValue(row, jmapHash(name));
+}
+
+void BcsvTable::setIntById(BcsvRow& row, std::uint32_t hash, std::int32_t value) {
+    const auto index = fieldIndex(hash);
+    if (!index || *index >= row.values.size()) {
+        return;
+    }
+    assignInteger(row.values[*index], fields_[*index].type, value);
+}
+
+void BcsvTable::setInt(BcsvRow& row, std::string_view name, std::int32_t value) {
+    setIntById(row, jmapHash(name), value);
+}
+
+void BcsvTable::setBoolById(BcsvRow& row, std::uint32_t hash, bool value) {
+    setIntById(row, hash, value ? 1 : 0);
+}
+
+void BcsvTable::setBool(BcsvRow& row, std::string_view name, bool value) {
+    setBoolById(row, jmapHash(name), value);
+}
+
+std::size_t BcsvTable::addRow() {
+    if (fields_.empty()) {
+        throw std::runtime_error("Cannot add a BCSV row to a table without fields");
+    }
+    if (rows_.size() >= std::numeric_limits<std::uint32_t>::max()) {
+        throw std::runtime_error("BCSV contains too many rows");
+    }
+    BcsvRow row;
+    row.values.reserve(fields_.size());
+    for (const auto& field : fields_) {
+        row.values.push_back(defaultValueFor(field.type));
+    }
+    rows_.push_back(std::move(row));
+    return rows_.size() - 1;
+}
+
+std::size_t BcsvTable::cloneRow(std::size_t index) {
+    if (index >= rows_.size()) {
+        throw std::out_of_range("BCSV row index out of range");
+    }
+    if (rows_.size() >= std::numeric_limits<std::uint32_t>::max()) {
+        throw std::runtime_error("BCSV contains too many rows");
+    }
+    BcsvRow copy = rows_[index];
+    rows_.insert(rows_.begin() + static_cast<std::ptrdiff_t>(index) + 1, std::move(copy));
+    return index + 1;
+}
+
+bool BcsvTable::removeRow(std::size_t index) {
+    if (index >= rows_.size()) {
+        return false;
+    }
+    rows_.erase(rows_.begin() + static_cast<std::ptrdiff_t>(index));
+    return true;
+}
+
+std::size_t BcsvTable::ensureField(std::string_view name, BcsvType type) {
+    const auto hash = jmapHash(name);
+    if (const auto existing = fieldIndex(hash)) {
+        return *existing;
+    }
+    if (fields_.size() >= std::numeric_limits<std::uint32_t>::max()) {
+        throw std::runtime_error("BCSV contains too many fields");
+    }
+    const auto width = fieldWidth(type);
+    if (entrySize_ > std::numeric_limits<std::uint16_t>::max() - width) {
+        throw std::runtime_error("BCSV entry size would exceed the 16-bit field offset");
+    }
+
+    BcsvField field;
+    field.hash = hash;
+    field.mask = isIntegerType(type) && width < 4
+        ? static_cast<std::uint32_t>((1U << (width * 8U)) - 1U)
+        : 0xFFFFFFFFU;
+    field.offset = static_cast<std::uint16_t>(entrySize_);
+    field.shift = 0;
+    field.type = type;
+    fields_.push_back(field);
+    entrySize_ += static_cast<std::uint32_t>(width);
+
+    const auto value = defaultValueFor(type);
+    for (auto& row : rows_) {
+        row.values.push_back(value);
+    }
+    // Offsets moved past the appended field, so rebuild the hash index.
+    fieldLookup_.clear();
+    for (std::size_t i = 0; i < fields_.size(); ++i) {
+        fieldLookup_[fields_[i].hash] = i;
+    }
+    return fields_.size() - 1;
+}
+
+BcsvValue defaultValueFor(BcsvType type) {
+    switch (type) {
+    case BcsvType::integer:
+    case BcsvType::integer2:
+        return std::int32_t{0};
+    case BcsvType::shortInteger:
+        return std::int16_t{0};
+    case BcsvType::byte:
+        return std::int8_t{0};
+    case BcsvType::floatingPoint:
+        return 0.0F;
+    case BcsvType::fixedString:
+    case BcsvType::stringOffset:
+        return std::string{};
+    }
+    return std::int32_t{0};
 }
 
 void BcsvTable::parse(const std::vector<std::uint8_t>& data) {
@@ -421,6 +664,38 @@ std::vector<std::uint8_t> BcsvTable::serialize() const {
     const auto alignedSize = (output.size() + 0x1FU) & ~std::size_t{0x1F};
     output.resize(alignedSize, 0x40);
     return output;
+}
+
+void BcsvTable::setRow(std::size_t index, const std::vector<BcsvValue>& values) {
+    if (index >= rows_.size()) {
+        throw std::out_of_range("BCSV row index out of range");
+    }
+    auto& target = rows_[index].values;
+    target.resize(fields_.size());
+    for (std::size_t i = 0; i < fields_.size(); ++i) {
+        target[i] = i < values.size() ? coerceToType(values[i], fields_[i].type)
+                                      : defaultValueFor(fields_[i].type);
+    }
+}
+
+std::size_t BcsvTable::insertRow(std::size_t index, const std::vector<BcsvValue>& values) {
+    if (fields_.empty()) {
+        throw std::runtime_error("Cannot insert a BCSV row into a table without fields");
+    }
+    if (rows_.size() >= std::numeric_limits<std::uint32_t>::max()) {
+        throw std::runtime_error("BCSV contains too many rows");
+    }
+    if (index > rows_.size()) {
+        index = rows_.size();
+    }
+    BcsvRow row;
+    row.values.resize(fields_.size());
+    for (std::size_t i = 0; i < fields_.size(); ++i) {
+        row.values[i] = i < values.size() ? coerceToType(values[i], fields_[i].type)
+                                          : defaultValueFor(fields_[i].type);
+    }
+    rows_.insert(rows_.begin() + static_cast<std::ptrdiff_t>(index), std::move(row));
+    return index;
 }
 
 std::string toString(const BcsvValue& value) {

@@ -58,18 +58,57 @@ public:
 
     [[nodiscard]] std::optional<std::size_t> fieldIndex(std::string_view name) const;
     [[nodiscard]] std::optional<std::size_t> fieldIndex(std::uint32_t hash) const;
+    [[nodiscard]] bool hasField(std::string_view name) const;
     [[nodiscard]] std::string getString(const BcsvRow& row, std::string_view name,
                                         std::string fallback = {}) const;
         [[nodiscard]] float getFloat(const BcsvRow& row, std::string_view name, float fallback = 0.0F) const;
     [[nodiscard]] std::int32_t getInt(const BcsvRow& row, std::string_view name,
                                       std::int32_t fallback = 0) const;
+    [[nodiscard]] bool getBool(const BcsvRow& row, std::string_view name,
+                               bool fallback = false) const;
     [[nodiscard]] std::string getStringById(const BcsvRow& row, std::uint32_t hash,
                                             std::string fallback = {}) const;
     [[nodiscard]] float getFloatById(const BcsvRow& row, std::uint32_t hash, float fallback = 0.0F) const;
     [[nodiscard]] std::int32_t getIntById(const BcsvRow& row, std::uint32_t hash,
                                           std::int32_t fallback = 0) const;
+    [[nodiscard]] bool getBoolById(const BcsvRow& row, std::uint32_t hash,
+                                   bool fallback = false) const;
+    // Raw stored value for a field, or nullptr when the field/row has no value.
+    // The pointer stays valid until the table is mutated.
+    [[nodiscard]] const BcsvValue* rawValue(const BcsvRow& row, std::uint32_t hash) const;
+    [[nodiscard]] const BcsvValue* rawValue(const BcsvRow& row, std::string_view name) const;
+
     void setString(BcsvRow& row, std::string_view name, std::string value);
     void setFloat(BcsvRow& row, std::string_view name, float value);
+    // Type-aware integer/boolean setters: the stored variant is chosen from the
+    // field's declared type, so a byte field keeps an int8_t and so on.
+    void setInt(BcsvRow& row, std::string_view name, std::int32_t value);
+    void setIntById(BcsvRow& row, std::uint32_t hash, std::int32_t value);
+    void setBool(BcsvRow& row, std::string_view name, bool value);
+    void setBoolById(BcsvRow& row, std::uint32_t hash, bool value);
+
+    // ---- structural mutation --------------------------------------------
+    // Appends a row initialised with type-appropriate defaults (0 / 0.0f / "").
+    // Returns the new row index. Throws when the table has no fields, because
+    // there is no schema to size a row against.
+    [[nodiscard]] std::size_t addRow();
+    // Inserts a copy of `index` directly after it and returns the new index.
+    // Throws std::out_of_range when `index` is not a valid row.
+    [[nodiscard]] std::size_t cloneRow(std::size_t index);
+    // Removes a row. Returns false when `index` is out of range.
+    bool removeRow(std::size_t index);
+    // Ensures a field exists, appending it when absent, and returns its index.
+    // Appending preserves every existing field offset and widens each row, so
+    // previously written data stays byte-identical.
+    [[nodiscard]] std::size_t ensureField(std::string_view name, BcsvType type);
+
+    // Replaces one row's values. Values are coerced to the field's declared
+    // type, missing entries fall back to defaults and extras are dropped.
+    // Throws std::out_of_range when `index` is not a valid row.
+    void setRow(std::size_t index, const std::vector<BcsvValue>& values);
+    // Inserts a row before `index` (clamped to the row count) with `values`
+    // coerced the same way as setRow(). Returns the index actually used.
+    [[nodiscard]] std::size_t insertRow(std::size_t index, const std::vector<BcsvValue>& values);
 
     [[nodiscard]] std::vector<std::uint8_t> serialize() const;
 
@@ -84,5 +123,8 @@ private:
 };
 
 [[nodiscard]] std::string toString(const BcsvValue& value);
+
+// Zero value for a field type, matching how the game pads an unused slot.
+[[nodiscard]] BcsvValue defaultValueFor(BcsvType type);
 
 } // namespace whitehole::smg
