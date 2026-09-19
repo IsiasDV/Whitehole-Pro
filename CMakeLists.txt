@@ -99,7 +99,7 @@ endif()
 add_library(whitehole_win32 INTERFACE)
 if(WHITEHOLE_HAVE_WIN32_GUI)
     target_compile_definitions(whitehole_win32 INTERFACE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-    target_link_libraries(whitehole_win32 INTERFACE comctl32 ole32 uuid shell32 comdlg32 opengl32 gdi32)
+    target_link_libraries(whitehole_win32 INTERFACE comctl32 ole32 uuid shell32 comdlg32 opengl32 gdi32 winhttp)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -112,6 +112,7 @@ endif()
 
 add_library(whitehole_app OBJECT
     cpp/src/app/cli.cpp
+    cpp/src/app/object_db_update.cpp
     ${WHITEHOLE_GUI_SOURCE}
 )
 target_link_libraries(whitehole_app PRIVATE whitehole_core whitehole_win32)

@@ -1,5 +1,8 @@
 #include "whitehole/app/application.hpp"
+#include "whitehole/app/settings.hpp"
+#include "whitehole/app/object_db_update.hpp"
 
+#include "whitehole/db/object_db.hpp"
 #include "whitehole/io/binary_file.hpp"
 #include "whitehole/io/rarc.hpp"
 #include "whitehole/io/yaz0.hpp"
@@ -9,6 +12,7 @@
 #include "whitehole/smg/hash.hpp"
 #include "whitehole/smg/stage_archive.hpp"
 
+#include <chrono>
 #include <iomanip>
 #include <iostream>
 #include <stdexcept>
@@ -43,7 +47,9 @@ void printUsage() {
         << "  whitehole-pro-console yaz0 decompress <input> <output>\n"
         << "  whitehole-pro-console bcsv inspect <table.bcsv> [--little]\n"
         << "  whitehole-pro-console bcsv roundtrip <input.bcsv> <output.bcsv> [--little]\n"
-        << "  whitehole-pro-console hash <field-name>\n";
+        << "  whitehole-pro-console hash <field-name>\n"
+        << "  whitehole-pro-console objectdb check [--data <directory>] [--no-cache]\n"
+        << "  whitehole-pro-console objectdb update [--data <directory>]\n";
 }
 
 int archiveCommand(int argc, char** argv) {
@@ -198,6 +204,77 @@ int mapCommand(int argc, char** argv) {
     return 0;
 }
 
+int objectDbCommand(int argc, char** argv) {
+    if (argc < 3) {
+        throw std::runtime_error("objectdb supports: check, update");
+    }
+    const std::string operation = argv[2];
+    if (operation != "check" && operation != "update") {
+        throw std::runtime_error("unknown objectdb operation: " + operation);
+    }
+    std::filesystem::path dataDir = dataDirectory(argv[0]);
+    bool useCache = true;
+    for (int index = 3; index < argc; ++index) {
+        const std::string flag = argv[index];
+        if (flag == "--no-cache") {
+            useCache = false;
+        } else if (flag == "--data" && index + 1 < argc) {
+            dataDir = argv[++index];
+        }
+    }
+    const std::filesystem::path jsonPath = dataDir / "objectdb.json";
+
+    if (operation == "update") {
+        std::cout << "Downloading " << kObjectDatabaseUrl << '\n';
+        const std::string failure = downloadObjectDatabase(jsonPath);
+        if (!failure.empty()) {
+            std::cerr << "Download failed: " << failure << '\n';
+            return 1;
+        }
+        std::cout << "Saved " << jsonPath.string() << '\n'
+                  << "Run 'whitehole-pro-console objectdb check' to verify it.\n";
+        return 0;
+    }
+
+    const std::filesystem::path cachePath =
+        useCache ? Settings::defaultConfigPath().parent_path() / "objectdb.cache"
+                 : std::filesystem::path{};
+
+    const auto started = std::chrono::steady_clock::now();
+    db::ObjectDatabase database;
+    database.load(jsonPath, cachePath);
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - started)
+                             .count();
+
+    if (database.empty()) {
+        std::cout << "No object database found at " << jsonPath.string() << '\n'
+                  << "Run 'whitehole-pro-console objectdb update' to download the community database.\n";
+        return 1;
+    }
+
+    std::size_t withClass = 0;
+    std::size_t withParameters = 0;
+    for (const auto& name : database.names()) {
+        const auto* info = database.classForObject(name, 2);
+        if (info == nullptr) continue;
+        ++withClass;
+        if (!info->properties.empty()) ++withParameters;
+    }
+
+    std::cout << "Object database: " << jsonPath.string() << '\n'
+              << "  objects:       " << database.size() << '\n'
+              << "  classes:       " << database.classCount() << '\n'
+              << "  categories:    " << database.categoryCount() << '\n'
+              << "  timestamp:     " << database.timestamp() << '\n'
+              << "  loaded from:   "
+              << (database.cacheLoaded() ? "compiled cache" : "objectdb.json") << '\n'
+              << "  load time:     " << elapsed << " ms\n"
+              << "  SMG2 coverage: " << withClass << " objects resolve a class, "
+              << withParameters << " expose parameters\n";
+    return 0;
+}
+
 } // namespace
 
 std::filesystem::path dataDirectory(const std::filesystem::path& executable) {
@@ -254,6 +331,9 @@ int runCli(int argc, char** argv) {
         }
         if (command == "map") {
             return mapCommand(argc, argv);
+        }
+        if (command == "objectdb") {
+            return objectDbCommand(argc, argv);
         }
         if (command == "hash") {
             if (argc != 3) {

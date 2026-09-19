@@ -14,6 +14,7 @@
 #include "whitehole/app/application.hpp"
 
 #include "whitehole/app/settings.hpp"
+#include "whitehole/app/object_db_update.hpp"
 #include "whitehole/db/name_table.hpp"
 #include "whitehole/db/object_db.hpp"
 #include "whitehole/render/viewport_scene.hpp"
@@ -841,7 +842,19 @@ int runGui(const std::filesystem::path& executable, const std::filesystem::path&
         state->dataRoot = dataDirectory(executable);
         state->galaxyNames.loadJson(state->dataRoot / "galaxies.json");
         state->zoneNames.loadJson(state->dataRoot / "zones.json");
-        state->objectDb.load(state->dataRoot / "objectdb.json");
+        const std::filesystem::path objectDbPath = state->dataRoot / "objectdb.json";
+        if (!std::filesystem::exists(objectDbPath) && objectDatabaseDownloadAvailable()) {
+            // Java downloads the community database on first run (data/objectdb.json
+            // is gitignored). Match that so a fresh checkout still gets real object
+            // names and full parameter metadata instead of a bare names-only view.
+            setStatus(*state, "Downloading the object database (first run, one time only)...");
+            const std::string failure = downloadObjectDatabase(objectDbPath);
+            if (!failure.empty()) {
+                setStatus(*state, "Object database download failed: " + failure);
+            }
+        }
+        state->objectDb.load(objectDbPath,
+                             Settings::defaultConfigPath().parent_path() / "objectdb.cache");
         rebuildRecentMenu(*state);
         applyTheme(*state);
         if (!state->settings.lastGameDir.empty() && initialFile.empty() &&

@@ -787,6 +787,179 @@ void testDbHelpersRoundTrip() {
     expect(special.lookup("Unknown") == "", "special renderer unknown empty");
 }
 
+void testObjectDatabaseV2() {
+    TemporaryDirectory temp;
+    const auto path = temp.path / "objectdb.json";
+    {
+        std::ofstream out(path, std::ios::binary);
+        out << R"({
+  "Timestamp": 1234567890,
+  "Categories": [{"Key":"enemy","Description":"Enemies"},{"Key":"stagepart","Description":"Stage Parts"}],
+  "Classes": [
+    {"InternalName":"SampleObj","Name":"SampleObj","Notes":"A test class","Games":3,"Progress":1,
+     "Parameters":{
+        "Obj_arg0":{"Name":"Range","Type":"Float","Games":3,"Needed":true,"Description":"How far.","Values":[],"Exclusives":[]},
+        "Obj_arg1":{"Name":"Mode","Type":"Integer","Games":3,"Needed":false,"Description":"Pick one.","Values":[{"Value":0,"Notes":"Off"},{"Value":1,"Notes":"On"}],"Exclusives":[]},
+        "Obj_arg2":{"Name":"Only SMG2","Type":"Integer","Games":2,"Needed":false,"Description":"","Values":[],"Exclusives":[]},
+        "Obj_arg3":{"Name":"Special","Type":"Boolean","Games":3,"Needed":false,"Description":"","Values":[],"Exclusives":["Kinopio"]},
+        "SW_A":{"Games":3,"Needed":false,"Description":"Switch A.","Values":[],"Exclusives":[]}
+     }}
+  ],
+  "Objects": [
+    {"InternalName":"Kinopio","ClassNameSMG1":"SampleObj","ClassNameSMG2":"SampleObj","Name":"Toad",
+     "Notes":"Friendly.","Category":"npc","ListSMG1":"ObjInfo","ListSMG2":"ObjInfo","File":"Map","Games":3,
+     "Progress":1,"IsUnused":false,"IsLeftover":false},
+    {"InternalName":"OldThing","ClassNameSMG1":"SampleObj","ClassNameSMG2":"SampleObj","Name":"Leftover",
+     "Category":"stagepart","Games":1,"IsUnused":true,"IsLeftover":true}
+  ]
+})";
+    }
+    whitehole::db::ObjectDatabase db;
+    db.load(path);
+
+    expect(db.size() == 2, "objectdb v2 object count wrong");
+    expect(db.classCount() == 1, "objectdb v2 class count wrong");
+    expect(db.categoryCount() == 2, "objectdb v2 category count wrong");
+    expect(db.timestamp() == 1234567890U, "objectdb v2 timestamp wrong");
+
+    const auto* kinopio = db.find("Kinopio");
+    expect(kinopio != nullptr, "objectdb v2 missing Kinopio");
+    expect(kinopio->name == "Toad", "objectdb v2 display name wrong");
+    expect(kinopio->description == "Friendly.", "objectdb v2 notes wrong");
+    expect(kinopio->className(1) == "SampleObj", "objectdb v2 smg1 class wrong");
+    expect(kinopio->className(2) == "SampleObj", "objectdb v2 smg2 class wrong");
+    expect(kinopio->list(2) == "ObjInfo", "objectdb v2 list wrong");
+    expect(!kinopio->unused, "objectdb v2 unused flag wrong");
+
+    expect(db.findClass("SampleObj") != nullptr, "objectdb v2 class lookup failed");
+    expect(db.classForObject("Kinopio", 2) != nullptr, "objectdb v2 class-for-object failed");
+
+    // Labels, descriptions and kinds come from the class metadata.
+    expect(db.propertyLabel("Kinopio", "Obj_arg0", 2) == "Range", "objectdb v2 label wrong");
+    expect(db.propertyDescription("Kinopio", "Obj_arg0", 2) == "How far.", "objectdb v2 description wrong");
+    const auto* range = db.propertyForObject("Kinopio", "Obj_arg0", 2);
+    expect(range != nullptr, "objectdb v2 float property missing");
+    expect(range->kind == whitehole::db::PropertyKind::Float, "objectdb v2 float kind wrong");
+    expect(range->needed, "objectdb v2 needed flag wrong");
+
+    const auto* mode = db.propertyForObject("Kinopio", "Obj_arg1", 2);
+    expect(mode != nullptr, "objectdb v2 list property missing");
+    expect(mode->kind == whitehole::db::PropertyKind::IntList, "objectdb v2 list kind wrong");
+    expect(mode->values.size() == 2, "objectdb v2 values count wrong");
+    expect(mode->values[1] == "1: On", "objectdb v2 value formatting wrong");
+
+    // Per-game filtering: Obj_arg2 only exists in SMG2.
+    expect(db.propertyUsed("Kinopio", "Obj_arg2", 2), "objectdb v2 smg2-only property hidden");
+    expect(!db.propertyUsed("Kinopio", "Obj_arg2", 1), "objectdb v2 smg2-only property leaked to smg1");
+
+    // Exclusives: Obj_arg3 is listed for Kinopio only.
+    expect(db.propertyUsed("Kinopio", "Obj_arg3", 2), "objectdb v2 exclusive property hidden");
+    expect(!db.propertyUsed("OldThing", "Obj_arg3", 2), "objectdb v2 exclusive property leaked");
+
+    // A parameter with no declared "Type" still becomes an integer cell, and an
+    // unknown parameter falls back to its raw identifier as the label.
+    const auto* switchA = db.propertyForObject("Kinopio", "SW_A", 2);
+    expect(switchA != nullptr, "objectdb v2 untyped property missing");
+    expect(switchA->kind == whitehole::db::PropertyKind::Integer, "objectdb v2 untyped kind wrong");
+    expect(db.propertyLabel("Kinopio", "SomethingElse", 2) == "SomethingElse",
+           "objectdb v2 unknown property label wrong");
+
+    // Alias table (Java getPropertyInfoForObject).
+    expect(whitehole::db::ObjectDatabase::aliasField("CommonPath_ID") == "Rail", "alias Rail wrong");
+    expect(whitehole::db::ObjectDatabase::aliasField("CameraSetId") == "Camera", "alias Camera wrong");
+    expect(whitehole::db::ObjectDatabase::aliasField("GroupId") == "Group", "alias Group wrong");
+    expect(whitehole::db::ObjectDatabase::aliasField("MessageId") == "Message", "alias Message wrong");
+    expect(whitehole::db::ObjectDatabase::aliasField("Plain") == "Plain", "alias passthrough wrong");
+
+    // Game availability (Java ObjectSelectForm filter).
+    expect(db.objectAvailable("Kinopio", 1) && db.objectAvailable("Kinopio", 2),
+           "objectdb v2 availability wrong");
+    expect(db.objectAvailable("OldThing", 1), "objectdb v2 smg1-only availability wrong");
+    expect(!db.objectAvailable("OldThing", 2), "objectdb v2 smg1-only leaked to smg2");
+
+    // Search matches display name, internal name and class name.
+    expect(db.search("toad", 2).size() == 1, "objectdb v2 search by display name");
+    expect(db.search("kinop", 2).size() == 1, "objectdb v2 search by internal name");
+    expect(db.search("sampleobj", 1).size() == 2, "objectdb v2 search by class name");
+    expect(db.search("nothinghere", 2).empty(), "objectdb v2 search false positive");
+
+    // Categories keep declaration order.
+    expect(db.categories()[0].key == "enemy", "objectdb v2 category order wrong");
+    expect(db.categories()[1].description == "Stage Parts", "objectdb v2 category description wrong");
+}
+
+void testObjectDatabaseCache() {
+    TemporaryDirectory temp;
+    const auto jsonPath = temp.path / "objectdb.json";
+    const auto cachePath = temp.path / "cache" / "objectdb.cache";
+
+    const auto writeJson = [&](std::string_view name) {
+        std::ofstream out(jsonPath, std::ios::binary | std::ios::trunc);
+        out << "{\"Timestamp\":7,\"Classes\":[{\"InternalName\":\"C\",\"Parameters\":{}}],"
+               "\"Objects\":[{\"InternalName\":\"Obj\",\"Name\":\""
+            << name << "\",\"ClassNameSMG1\":\"C\",\"ClassNameSMG2\":\"C\",\"Games\":3}]}";
+    };
+
+    writeJson("First");
+    whitehole::db::ObjectDatabase db;
+    db.load(jsonPath, cachePath);
+    expect(!db.cacheLoaded(), "objectdb cache should not be used before it exists");
+    expect(db.displayName("Obj") == "First", "objectdb cache source value wrong");
+    expect(std::filesystem::exists(cachePath), "objectdb cache was not written");
+
+    whitehole::db::ObjectDatabase cached;
+    cached.load(jsonPath, cachePath);
+    expect(cached.cacheLoaded(), "objectdb cache was not used on the second load");
+    expect(cached.size() == 1, "objectdb cache object count wrong");
+    expect(cached.classCount() == 1, "objectdb cache class count wrong");
+    expect(cached.displayName("Obj") == "First", "objectdb cache display name wrong");
+    expect(cached.timestamp() == 7U, "objectdb cache timestamp wrong");
+
+    // Rewriting the JSON must invalidate the compiled cache. The source
+    // timestamp is pushed into the future so the test does not depend on clock
+    // granularity.
+    writeJson("Second");
+    std::error_code error;
+    const auto bumped = std::filesystem::last_write_time(jsonPath, error) + std::chrono::seconds(10);
+    std::filesystem::last_write_time(jsonPath, bumped, error);
+
+    whitehole::db::ObjectDatabase reparsed;
+    reparsed.load(jsonPath, cachePath);
+    expect(!reparsed.cacheLoaded(), "objectdb cache was not invalidated");
+    expect(reparsed.displayName("Obj") == "Second", "objectdb cache invalidation value wrong");
+}
+
+void testRealObjectDatabase() {
+#ifdef WHITEHOLE_SOURCE_DIR
+    const auto path = std::filesystem::path(WHITEHOLE_SOURCE_DIR) / "data" / "objectdb.json";
+    if (!std::filesystem::exists(path)) return; // optional bulky data
+
+    whitehole::db::ObjectDatabase db;
+    db.load(path);
+    expect(db.size() > 2000, "real objectdb object count unexpectedly small");
+    expect(db.classCount() > 800, "real objectdb class count unexpectedly small");
+    expect(db.categoryCount() >= 10, "real objectdb categories unexpectedly few");
+    expect(db.timestamp() > 0, "real objectdb timestamp missing");
+
+    // Whenever the database declares a class name for an object it must resolve,
+    // otherwise the property grid would silently come up empty.
+    std::size_t declared = 0;
+    std::size_t resolved = 0;
+    for (const auto& name : db.names()) {
+        const auto* info = db.find(name);
+        if (info == nullptr || info->classNameSmg2.empty()) continue;
+        ++declared;
+        if (db.findClass(info->classNameSmg2) != nullptr) ++resolved;
+    }
+    expect(declared > 2000, "real objectdb declares too few SMG2 class names");
+    expect(resolved == declared, "real objectdb has unresolvable SMG2 class names");
+
+    const auto* rail = db.findClass("RailMoveObj");
+    expect(rail != nullptr, "real objectdb missing the RailMoveObj class");
+    expect(!rail->properties.empty(), "real objectdb RailMoveObj has no parameters");
+#endif
+}
+
 } // namespace
 
 int main() {
@@ -808,6 +981,9 @@ int main() {
         testJsonRoundTrip();
         testSettingsRoundTrip();
         testObjectDatabase();
+        testObjectDatabaseV2();
+        testObjectDatabaseCache();
+        testRealObjectDatabase();
         testDataHolderRoundTrip();
         testDbHelpersRoundTrip();
         std::cout << "All Whitehole native core tests passed\n";
