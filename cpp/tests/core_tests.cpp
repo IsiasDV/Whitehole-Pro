@@ -15,6 +15,7 @@
 #include "whitehole/util/text.hpp"
 #include "whitehole/math/geometry.hpp"
 #include "whitehole/render/camera.hpp"
+#include "whitehole/render/object_visual.hpp"
 #include "whitehole/render/viewport_scene.hpp"
 #include "whitehole/smg/bcsv.hpp"
 #include "whitehole/smg/bti.hpp"
@@ -30,6 +31,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -298,6 +300,86 @@ void testViewportScene() {
     expect(hit.has_value() && *hit == 0, "viewport picking missed the centered object");
     // Far corner of the screen should miss the single centered box.
     expect(!scene.pick(camera, 799.0F, 599.0F, 800.0F, 600.0F).has_value(), "viewport picking hit empty space");
+}
+
+void testObjectVisual() {
+    using whitehole::render::ObjectCategory;
+    using whitehole::render::categoryStyle;
+    using whitehole::render::classifyObject;
+    using whitehole::render::objectStyle;
+    using whitehole::render::shapeTriangles;
+
+    // Table kind drives the category first.
+    expect(classifyObject("start", "Mario") == ObjectCategory::Player, "start objects should classify as Player");
+    expect(classifyObject("camera", "CameraPos") == ObjectCategory::Camera, "camera table should classify as Camera");
+    expect(classifyObject("area", "AreaVolume") == ObjectCategory::Zone, "area table should classify as Zone");
+    expect(classifyObject("gravity", "GravitySphere") == ObjectCategory::Gravity, "gravity table should classify as Gravity");
+    expect(classifyObject("mappart", "Elevator") == ObjectCategory::MapPart, "mappart table should classify as MapPart");
+    expect(classifyObject("cutscene", "Demo") == ObjectCategory::Cutscene, "cutscene table should classify as Cutscene");
+
+    // Object names refine plain "obj" placements.
+    expect(classifyObject("obj", "Kinopio") == ObjectCategory::Player, "Kinopio should classify as Player");
+    expect(classifyObject("obj", "Kuribo") == ObjectCategory::Enemy, "Kuribo should classify as Enemy");
+    expect(classifyObject("obj", "BossKuriboJunior") == ObjectCategory::Enemy, "Boss names should classify as Enemy");
+    expect(classifyObject("obj", "PowerStar") == ObjectCategory::Item, "PowerStar should classify as Item");
+    expect(classifyObject("obj", "PurpleCoin") == ObjectCategory::Item, "coins should classify as Item");
+    expect(classifyObject("obj", "PlanetDifferencesAndBeyond") == ObjectCategory::Terrain, "planets should classify as Terrain");
+    expect(classifyObject("obj", "OceanWave") == ObjectCategory::Misc, "unknown names should classify as Misc");
+
+    // Every category has a distinct, valid color (the whole visual system
+    // depends on categories being tellable apart at a glance).
+    for (std::size_t a = 0; a < whitehole::render::categoryCount(); ++a) {
+        const auto& styleA = categoryStyle(static_cast<ObjectCategory>(a));
+        expect(std::abs(styleA.color[0]) + std::abs(styleA.color[1]) + std::abs(styleA.color[2]) > 0.1F,
+               "category color must not be black");
+        for (std::size_t b = a + 1; b < whitehole::render::categoryCount(); ++b) {
+            const auto& styleB = categoryStyle(static_cast<ObjectCategory>(b));
+            const bool same = std::abs(styleA.color[0] - styleB.color[0]) < 0.01F &&
+                              std::abs(styleA.color[1] - styleB.color[1]) < 0.01F &&
+                              std::abs(styleA.color[2] - styleB.color[2]) < 0.01F;
+            expect(!same, "category colors must be distinct");
+            expect(styleA.shape != styleB.shape || std::string_view(styleA.label) != std::string_view(styleB.label),
+                   "categories must differ in shape or label");
+        }
+    }
+
+    // Shape meshes are unit-sized triangle soup.
+    const auto cube = shapeTriangles(whitehole::render::CategoryStyle::Shape::Cube);
+    expect(cube.size() == 12 * 3, "cube mesh should have 12 triangles");
+    const auto sphere = shapeTriangles(whitehole::render::CategoryStyle::Shape::Sphere);
+    expect(sphere.size() == 12 * 8 * 2 * 3, "sphere mesh triangle count is wrong");
+    const auto pyramid = shapeTriangles(whitehole::render::CategoryStyle::Shape::Pyramid);
+    expect(pyramid.size() == 6 * 3, "pyramid mesh should have 6 triangles");
+    const auto octa = shapeTriangles(whitehole::render::CategoryStyle::Shape::Octahedron);
+    expect(octa.size() == 8 * 3, "octahedron mesh should have 8 triangles");
+    const auto cylinder = shapeTriangles(whitehole::render::CategoryStyle::Shape::Cylinder);
+    expect(cylinder.size() == 12 * 4 * 3, "cylinder mesh triangle count is wrong");
+
+    const float maxComponent = [](const std::vector<whitehole::math::Vec3f>& triangles) {
+        float worst = 0.0F;
+        for (const auto& vertex : triangles) {
+            worst = std::max(worst, std::max({std::abs(vertex.x), std::abs(vertex.y), std::abs(vertex.z)}));
+        }
+        return worst;
+    }(cube);
+    expect(maxComponent < 1.0001F, "cube mesh must stay within the unit cube");
+
+    // The scene stores the category so renderers and lists can share it.
+    whitehole::smg::PlacementObject object;
+    object.name = "Kuribo";
+    object.kind = "obj";
+    object.scale = {0.001F, 0.001F, 0.001F};
+    whitehole::render::ViewportScene scene;
+    scene.rebuild({object});
+    expect(scene.boxes().size() == 1, "viewport scene dropped the object");
+    expect(scene.boxes().front().category == ObjectCategory::Enemy, "viewport scene lost the object category");
+    // Micro-scaled objects are clamped to the minimum visual scale so they
+    // stay visible and clickable.
+    expect(std::abs(scene.boxes().front().halfExtents.x - 25.0F * whitehole::render::kMinVisualScale) < 0.01F,
+           "minimum visual scale clamp failed");
+    // objectStyle ties classification to visuals in one call.
+    expect(&objectStyle("obj", "PowerStar") == &categoryStyle(ObjectCategory::Item),
+           "objectStyle should match classifyObject");
 }
 
 void testHashes() {
@@ -970,6 +1052,7 @@ int main() {
         testMath();
         testViewportCamera();
         testViewportScene();
+        testObjectVisual();
         testHashes();
         testBcsvEndianness();
         testRarcEndianness();

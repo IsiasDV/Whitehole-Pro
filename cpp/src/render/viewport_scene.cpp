@@ -62,8 +62,13 @@ math::Matrix4 placementWorldMatrix(const smg::PlacementObject& object) noexcept 
     const math::Vec3f safeScale{std::abs(object.scale.x) > 0.000001F ? object.scale.x : 1.0F,
                                 std::abs(object.scale.y) > 0.000001F ? object.scale.y : 1.0F,
                                 std::abs(object.scale.z) > 0.000001F ? object.scale.z : 1.0F};
-    const math::Matrix4 scaled = math::Matrix4::scale(
-        {safeScale.x * kPlaceholderHalfExtent, safeScale.y * kPlaceholderHalfExtent, safeScale.z * kPlaceholderHalfExtent});
+    // kMinVisualScale keeps micro-scaled objects visible and clickable; it is
+    // a rendering/picking clamp only and never touches the stored level data.
+    const float visualX = std::max(std::abs(safeScale.x), kMinVisualScale);
+    const float visualY = std::max(std::abs(safeScale.y), kMinVisualScale);
+    const float visualZ = std::max(std::abs(safeScale.z), kMinVisualScale);
+    const math::Matrix4 scaled =
+        math::Matrix4::scale({visualX * kPlaceholderHalfExtent, visualY * kPlaceholderHalfExtent, visualZ * kPlaceholderHalfExtent});
     const math::Matrix4 rotation = math::Matrix4::rotationZ(object.rotation.x * kDegreesToRadians) *
                                    math::Matrix4::rotationY(object.rotation.y * kDegreesToRadians) *
                                    math::Matrix4::rotationX(object.rotation.z * kDegreesToRadians);
@@ -127,9 +132,15 @@ void ViewportScene::rebuild(const std::vector<smg::PlacementObject>& objects) {
         box.kind = object.kind;
         box.world = placementWorldMatrix(object);
         box.center = object.position;
+        // Extents mirror the visual clamp used by the world matrix so the
+        // frame-all radius and picking agree with what is drawn.
         const float extent = kPlaceholderHalfExtent *
-                             std::max({std::abs(object.scale.x), std::abs(object.scale.y), std::abs(object.scale.z)});
+                             std::max({std::abs(object.scale.x) > 0.000001F ? std::abs(object.scale.x) : 1.0F,
+                                       std::abs(object.scale.y) > 0.000001F ? std::abs(object.scale.y) : 1.0F,
+                                       std::abs(object.scale.z) > 0.000001F ? std::abs(object.scale.z) : 1.0F,
+                                       kMinVisualScale});
         box.halfExtents = {extent, extent, extent};
+        box.category = classifyObject(object.kind, object.name);
         boxes_.push_back(box);
         sum = sum + object.position;
     }

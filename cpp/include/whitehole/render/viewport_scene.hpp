@@ -7,6 +7,7 @@
 
 #include "whitehole/math/geometry.hpp"
 #include "whitehole/render/camera.hpp"
+#include "whitehole/render/object_visual.hpp"
 #include "whitehole/smg/placement.hpp"
 
 #include <cstddef>
@@ -20,6 +21,10 @@ namespace whitehole::render {
 // Large enough to click at galaxy scale, small enough not to swallow maps.
 inline constexpr float kPlaceholderHalfExtent = 25.0F;
 
+// Every object is drawn with at least this scale so micro-scaled objects
+// (scale 0.001 etc.) stay visible and clickable at galaxy zoom levels.
+inline constexpr float kMinVisualScale = 0.35F;
+
 struct ViewportBox {
     std::size_t objectIndex{0};
     std::string name;
@@ -27,6 +32,7 @@ struct ViewportBox {
     math::Matrix4 world{};
     math::Vec3f center{};
     math::Vec3f halfExtents{kPlaceholderHalfExtent, kPlaceholderHalfExtent, kPlaceholderHalfExtent};
+    ObjectCategory category{ObjectCategory::Misc};
 };
 
 class ViewportScene {

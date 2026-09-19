@@ -1,4 +1,4 @@
-#ifndef UNICODE
+﻿#ifndef UNICODE
 #define UNICODE
 #endif
 #ifndef _UNICODE
@@ -17,7 +17,7 @@
 #include "whitehole/app/object_db_update.hpp"
 #include "whitehole/db/name_table.hpp"
 #include "whitehole/db/object_db.hpp"
-#include "whitehole/render/viewport_scene.hpp"
+#include "whitehole/render/object_visual.hpp"
 #include "whitehole/util/json.hpp"
 #include "whitehole/util/text.hpp"
 #include "whitehole/render/viewport_win32.hpp"
@@ -53,6 +53,7 @@ constexpr int kIdOpenGame = 1001;
 constexpr int kIdOpenMap = 1002;
 constexpr int kIdSave = 1003;
 constexpr int kIdExit = 1004;
+constexpr int kIdShowLabels = 1005;
 constexpr int kIdGalaxies = 1101;
 constexpr int kIdZones = 1102;
 constexpr int kIdObjects = 1103;
@@ -194,7 +195,7 @@ void showFirstBootSplash(HWND owner) {
 // A small, modern face-lift for the raw-Win32 chrome: a single Segoe UI 9pt
 // font applied to the window and every child control. The manifest already
 // enables Common Controls v6, so the themed standard controls plus this font
-// are the only visible change — no new libraries required. The font handle is
+// are the only visible change â€” no new libraries required. The font handle is
 // intentionally not freed (created once per window, for the life of the app).
 void applyModernTheme(HWND window) {
     LOGFONTW logFont{};
@@ -257,6 +258,7 @@ struct EditorState {
     std::optional<std::size_t> viewportSelected;
     bool viewportReady{false};
     bool syncingSelection{false};
+    bool showLabels{false};
 };
 
 // Keeps every control anchored while the window is resized: three list columns
@@ -487,6 +489,9 @@ void showObject(EditorState& state, int stageIndex) {
     setWindowText(state.scaleX, formatFloat(object.scale.x));
     setWindowText(state.scaleY, formatFloat(object.scale.y));
     setWindowText(state.scaleZ, formatFloat(object.scale.z));
+    // Same category language as the viewport legend and the list chips.
+    const auto& style = render::objectStyle(object.kind, object.name);
+    setStatus(state, std::string(object.name) + " \u2014 " + style.label + " (" + object.kind + "/" + object.layer + ")");
 }
 
 void applyObject(EditorState& state) {
@@ -623,7 +628,10 @@ LRESULT CALLBACK editorProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         created->searchEdit = CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
                                             516, 32, 360, 24, window,
                                             reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdSearch)), nullptr, nullptr);
-        created->objectsList = CreateWindowW(L"LISTBOX", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
+        // Owner-draw fixed: rows get the same category color chip the 3D
+        // viewport uses, so list and scene share one visual language.
+        created->objectsList = CreateWindowW(L"LISTBOX", L"",
+                                             WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS,
                                              516, 60, 360, 332, window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdObjects)), nullptr, nullptr);
 
         created->nameLabel = CreateWindowW(L"STATIC", L"Name", WS_CHILD | WS_VISIBLE, 12, 404, 50, 18, window, nullptr, nullptr, nullptr);
@@ -653,7 +661,9 @@ LRESULT CALLBACK editorProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         created->applyButton = CreateWindowW(L"BUTTON", L"Apply", WS_CHILD | WS_VISIBLE, 640, 400, 90, 28, window,
                       reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdApply)), nullptr, nullptr);
         created->hintLabel =
-            CreateWindowW(L"STATIC", L"3D view: left-drag pans, right-drag orbits, wheel zooms, click selects, Space frames.",
+            CreateWindowW(L"STATIC",
+                          L"3D view: left-drag pans, right-drag orbits, wheel zooms, click selects, Space frames. "
+                          L"Colors match the list and the in-view legend.",
                           WS_CHILD | WS_VISIBLE, 12, 200, 860, 18, window, nullptr, nullptr, nullptr);
         created->status = CreateWindowW(L"STATIC", L"Open a game folder or a map archive to begin.",
                                         WS_CHILD | WS_VISIBLE, 12, 504, 860, 22, window,
@@ -684,6 +694,45 @@ LRESULT CALLBACK editorProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         limits->ptMinTrackSize.y = 720;
         return 0;
     }
+    case WM_MEASUREITEM:
+        // Owner-draw object rows: fixed height with room for the color chip.
+        if (wParam == kIdObjects) {
+            auto* measure = reinterpret_cast<MEASUREITEMSTRUCT*>(lParam);
+            measure->itemHeight = 18;
+            return TRUE;
+        }
+        break;
+    case WM_DRAWITEM: {
+        auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
+        if (wParam != kIdObjects || state == nullptr || !state->stage || draw->itemID < 0 ||
+            static_cast<std::size_t>(draw->itemID) >= state->stage->objects().size()) {
+            break;
+        }
+        const auto& object = state->stage->objects()[static_cast<std::size_t>(draw->itemID)];
+        const auto& style = render::objectStyle(object.kind, object.name);
+        if ((draw->itemState & ODS_SELECTED) != 0) {
+            FillRect(draw->hDC, &draw->rcItem, GetSysColorBrush(COLOR_HIGHLIGHT));
+            SetTextColor(draw->hDC, GetSysColor(COLOR_HIGHLIGHTTEXT));
+        } else {
+            FillRect(draw->hDC, &draw->rcItem, GetSysColorBrush(COLOR_WINDOW));
+            SetTextColor(draw->hDC, GetSysColor(COLOR_WINDOWTEXT));
+        }
+        SetBkMode(draw->hDC, TRANSPARENT);
+        // Category chip: the same color the viewport renders the object in.
+        const int chipY = draw->rcItem.top + (draw->rcItem.bottom - draw->rcItem.top - 10) / 2;
+        RECT chip{draw->rcItem.left + 5, chipY, draw->rcItem.left + 15, chipY + 10};
+        HBRUSH chipBrush = CreateSolidBrush(RGB(static_cast<int>(style.color[0] * 255.0F),
+                                                static_cast<int>(style.color[1] * 255.0F),
+                                                static_cast<int>(style.color[2] * 255.0F)));
+        FillRect(draw->hDC, &chip, chipBrush);
+        DeleteObject(chipBrush);
+        const std::wstring text = utf8ToWide(object.name + "   " + object.kind + "/" + object.layer);
+        TextOutW(draw->hDC, draw->rcItem.left + 22, draw->rcItem.top + 2, text.c_str(), static_cast<int>(text.size()));
+        if ((draw->itemState & ODS_FOCUS) != 0) {
+            DrawFocusRect(draw->hDC, &draw->rcItem);
+        }
+        return TRUE;
+    }
     case WM_COMMAND:
         if (state == nullptr) {
             break;
@@ -709,6 +758,15 @@ LRESULT CALLBACK editorProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                 break;
             case kIdApply:
                 applyObject(*state);
+                break;
+            case kIdShowLabels:
+                state->showLabels = !state->showLabels;
+                CheckMenuItem(GetMenu(window), kIdShowLabels,
+                              MF_BYCOMMAND | (state->showLabels ? MF_CHECKED : MF_UNCHECKED));
+                if (state->viewportReady) {
+                    state->viewport.setShowLabels(state->showLabels);
+                }
+                setStatus(*state, state->showLabels ? "Object labels on." : "Object labels off.");
                 break;
             case kIdExit:
                 DestroyWindow(window);
@@ -830,6 +888,7 @@ int runGui(const std::filesystem::path& executable, const std::filesystem::path&
     AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(fileMenu), L"File");
     HMENU viewMenu = CreatePopupMenu();
     AppendMenuW(viewMenu, MF_STRING, kIdToggleDark, L"Toggle Dark Theme");
+    AppendMenuW(viewMenu, MF_STRING, kIdShowLabels, L"Show Object Labels");
     AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(viewMenu), L"View");
 
     HWND window = CreateWindowW(L"WhiteholeProEditor", L"Whitehole Pro", WS_OVERLAPPEDWINDOW,
@@ -881,6 +940,8 @@ int runGui(const std::filesystem::path& executable, const std::filesystem::path&
         if (!opened) {
             setStatus(*state, "Drag a map archive onto the window, or use File > Open Game Directory.");
         }
+        CheckMenuItem(GetMenu(window), kIdShowLabels,
+                      MF_BYCOMMAND | (state->showLabels ? MF_CHECKED : MF_UNCHECKED));
     }
         ShowWindow(window, SW_SHOW);
     UpdateWindow(window);

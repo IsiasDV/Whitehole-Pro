@@ -6,3 +6,20 @@ data/objectdb.json
 .idea
 *.iml
 src/META-INF/MANIFEST.MF
+
+# Scratch: build/debug logs and one-off helper scripts
+*.log
+build_*.txt
+check_files.*
+fix_indent.ps1
+quick-outline.txt
+staleness.txt
+tests_exit.txt
+run_exit.txt
+build_exit.txt
+build_state.txt
+*.bak
+restore_labels.diff
+
+# Visual Studio / IDE local state
+.vs/
