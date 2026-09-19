@@ -1749,6 +1749,15 @@ std::vector<std::uint8_t> makeMat3Body() {
     for (std::size_t entry = 0; entry < 8; ++entry) {
         putU16(body, kTextureIndexTable - 8 + entry * 2, entry == 0 ? 0 : 0xFFFF);
     }
+    // The record's texture-index block sits at record + 0x84 and holds one
+    // short per slot; grow the section so the block fits before the table.
+    constexpr std::size_t kRecordTexBlock = kRecord + 0x84;
+    constexpr std::size_t kNewSectionSize = kRecordTexBlock + 16;
+    static_assert(kNewSectionSize <= kTextureIndexTable, "record block would overlap the texture index table");
+    (void)kNewSectionSize;
+    for (std::size_t entry = 0; entry < 8; ++entry) {
+        putU16(body, kRecordTexBlock - 8 + entry * 2, entry == 0 ? 0 : 0xFFFF);
+    }
     (void)kRecordSize;
     return body;
 }

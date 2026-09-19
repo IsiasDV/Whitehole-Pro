@@ -168,10 +168,10 @@ std::array<float, 4> colorValue(const Reader& reader, std::size_t position, int 
                     static_cast<float>(reader.u8(position + 2)) / 255.0F, 1.0F};
         case 3: { // RGBA4
             const std::uint16_t word = reader.u16(position);
-            return {static_cast<float>((word >> 12) & 0xFU) / 15.0F,
-                    static_cast<float>((word >> 8) & 0xFU) / 15.0F,
-                    static_cast<float>((word >> 4) & 0xFU) / 15.0F,
-                    static_cast<float>(word & 0xFU) / 15.0F};
+            return {static_cast<float>(expand4(static_cast<std::uint8_t>((word >> 12) & 0xFU))) / 255.0F,
+                    static_cast<float>(expand4(static_cast<std::uint8_t>((word >> 8) & 0xFU))) / 255.0F,
+                    static_cast<float>(expand4(static_cast<std::uint8_t>((word >> 4) & 0xFU))) / 255.0F,
+                    static_cast<float>(expand4(static_cast<std::uint8_t>(word & 0xFU))) / 255.0F};
         }
         case 4: { // RGBA6, stored in the high 24 bits of a word
             const std::uint32_t word = reader.u32(position) >> 8;
@@ -609,6 +609,9 @@ std::array<float, 4> mat3Color8(const Reader& reader, std::size_t table, std::ui
 // preview needs are kept, but the record is still walked field by field so the
 // cursor lands exactly where the Java reader's does.
 void readMAT3(const Reader& reader, std::size_t sectionStart, std::size_t sectionSize, BmdModel& model) {
+    // One material record: the byte/short field indices the reader walks in
+    // order, from pixelEngineMode through the texture index list.
+    constexpr std::size_t kRecordSize = 0x14C;
     const auto count = static_cast<std::size_t>(reader.u16(sectionStart + 8));
     const auto dataTableOffset = reader.u32(sectionStart + 0xC);
     const auto remapOffset = reader.u32(sectionStart + 0x10);
@@ -629,7 +632,7 @@ void readMAT3(const Reader& reader, std::size_t sectionStart, std::size_t sectio
     const auto byteTable = [&reader](std::size_t table, std::size_t& cursor) {
         const auto index = reader.u8(cursor);
         cursor += 1;
-        return reader.u8(table + index);
+        return reader.u8(table + static_cast<std::size_t>(index));
     };
     const auto shortTable = [&reader](std::size_t table, std::size_t& cursor) {
         const auto index = reader.u16(cursor);
@@ -650,26 +653,36 @@ void readMAT3(const Reader& reader, std::size_t sectionStart, std::size_t sectio
         material.name = reader.string(sectionStart + nameOffset + reader.u16(nameEntry + 2));
 
         const auto remap = static_cast<std::size_t>(reader.u16(sectionStart + remapOffset + index * 2));
-        std::size_t cursor = sectionStart + dataTableOffset + remap * 0x14C;
+        std::size_t cursor = sectionStart + dataTableOffset + remap * kRecordSize;
 
         material.pixelEngineMode = reader.u8(cursor);
         cursor += 1;
         material.cullingMode = byteTable(sectionStart + cullModeOffset, cursor);
         const auto colorChannelCount = static_cast<int>(byteTable(sectionStart + colorChannelCountOffset, cursor));
-        (void)byteTable(sectionStart + texGenCountOffset, cursor);
-        (void)byteTable(sectionStart + tevStageCountOffset, cursor);
-        (void)byteTable(sectionStart + zCompLocOffset, cursor); // depth test before texture
-        const auto zModeIndex = static_cast<std::size_t>(reader.u8(cursor));
-        cursor += 1;
-        (void)reader.u8(sectionStart + zModeOffset + zModeIndex * 4); // depth-test flags
+        const auto texGenCount = static_cast<int>(byteTable(sectionStart + texGenCountOffset, cursor));
+        const auto tevStageCount = static_cast<int>(byteTable(sectionStart + tevStageCountOffset, cursor));
+        (void)texGenCount;
+        (void)tevStageCount;
+        // zcomp loc is stored as a byte index; the value decides whether depth
+        // testing happens before texturing, which the preview does not need.
+        (void)byteTable(sectionStart + zCompLocOffset, cursor);
+        { // ZMode: one byte index into a four-byte-per-entry table.
+            const auto zModeIndex = static_cast<std::size_t>(reader.u8(cursor));
+            cursor += 1;
+            (void)reader.u8(sectionStart + zModeOffset + zModeIndex * 4); // blend enable
+            (void)reader.u8(sectionStart + zModeOffset + zModeIndex * 4 + 1); // depth function
+            (void)reader.u8(sectionStart + zModeOffset + zModeIndex * 4 + 2); // write to Z
+        } // ZMode
         (void)byteTable(sectionStart + ditherOffset, cursor);
 
         material.diffuseColor = color8Table(sectionStart + materialColorOffset, cursor);
         (void)color8Table(sectionStart + materialColorOffset, cursor); // second colour channel
+        // Light channels: two entries of one short index each when present,
+        // otherwise four skipped bytes per channel (matches the Java reader).
         for (int channel = 0; channel < 2; ++channel) {
             if (channel < colorChannelCount) {
-                (void)shortTable(sectionStart + colorChannelOffset, cursor);
-                (void)shortTable(sectionStart + colorChannelOffset, cursor);
+                cursor += 2;
+                cursor += 2;
             } else {
                 cursor += 4;
             }
@@ -678,13 +691,20 @@ void readMAT3(const Reader& reader, std::size_t sectionStart, std::size_t sectio
         (void)color8Table(sectionStart + ambientColorOffset, cursor);
 
         cursor += 16; // light table (eight shorts), unused by a static preview
-        cursor += 16; // texture generators: one two-byte index per map
-        cursor += 16; // post texture generators
-        cursor += 20; // ten texture-matrix indices
-        cursor += 40; // post texture matrices (twenty shorts)
+        // Texture generators, post texture generators, texture matrices and
+        // their post block are positional: eight, eight, ten and twenty shorts
+        // respectively, whatever the counts above say.
+        cursor += 16;
+        cursor += 16;
+        cursor += 20;
+        cursor += 40;
 
         for (std::size_t slot = 0; slot < material.textureIndices.size(); ++slot) {
-            const auto textureIndex = shortTable(sectionStart + textureIndexOffset, cursor);
+            // Texture indices are a raw short array inside the record; the
+            // short-table path would index the table, which this layout does not
+            // have. 0xFFFF means "unused texture map".
+            const auto textureIndex = reader.u16(cursor);
+            cursor += 2;
             material.textureIndices[slot] = textureIndex == 0xFFFFU ? -1 : static_cast<std::int32_t>(textureIndex);
         }
     }

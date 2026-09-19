@@ -78,11 +78,8 @@ add_library(whitehole_core
     cpp/src/smg/game_archive.cpp
     cpp/src/smg/hash.cpp
     cpp/src/smg/bti.cpp
-<<<<<<< Updated upstream
     cpp/src/smg/bmd.cpp
-=======
     cpp/src/smg/object_model.cpp
->>>>>>> Stashed changes
     cpp/src/smg/stage_archive.cpp
     cpp/src/util/json.cpp
 )

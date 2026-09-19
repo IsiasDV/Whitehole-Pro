@@ -1,2 +1,0 @@
-[1/2] Building CXX object CMakeFiles\whitehole_core_tests.dir\cpp\tests\core_tests.cpp.obj
-[2/2] Linking CXX executable whitehole_core_tests.exe
